@@ -1,0 +1,34 @@
+{
+  "template_id": "ege_math_profile_2024",
+  "template_name": "ЕГЭ Математика Профиль 2024",
+  "page_size": [2480, 3508],
+  "repers": {
+    "expected_zones": {
+      "top_left": [0.05, 0.05, 0.25, 0.25],
+      "top_right": [0.75, 0.05, 0.95, 0.25],
+      "bottom_left": [0.05, 0.75, 0.25, 0.95],
+      "bottom_right": [0.75, 0.75, 0.95, 0.95]
+    },
+    "target_points": {
+      "top_left": [0.1, 0.1],
+      "top_right": [0.9, 0.1],
+      "bottom_left": [0.1, 0.9],
+      "bottom_right": [0.9, 0.9]
+    }
+  },
+  "cell_grids": {
+    "participant_surname": { "x": 400, "y": 800, "cols": 25, "rows": 1, "x_step": 60, "y_step": 1, "cell_width": 58, "cell_height": 70, "type": "text" },
+    "participant_name": { "x": 400, "y": 880, "cols": 25, "rows": 1, "x_step": 60, "y_step": 1, "cell_width": 58, "cell_height": 70, "type": "text" }
+  },
+  "answer_blocks": {
+    "main": {
+      "tasks": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+      "label_zone": [100, 1200, 200, 2500],
+      "answer_zone": [250, 1200, 1500, 2500],
+      "cell_count": 12,
+      "type": "math",
+      "allowed_chars": "0123456789-,."
+    }
+  },
+  "enable_math_answer_healing": true
+}

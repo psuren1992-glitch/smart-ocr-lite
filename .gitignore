@@ -1,0 +1,23 @@
+.secrets/
+__pycache__/
+*.pyc
+tmp/
+*.log
+
+# Личные данные учеников — не публикуем
+data/labeling/
+data/uploads/
+data/results/
+debug_crops/
+
+# Скрипты для локального тестирования — не нужны пользователям
+test_run.py
+test_all_blanks.py
+test_teacher_blanks.py
+debug_cells.py
+
+# Прочее
+.env
+*.png.bak
+.vscode/
+.idea/

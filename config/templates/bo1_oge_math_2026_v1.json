@@ -1,0 +1,363 @@
+{
+  "template_id": "bo1_oge_math_2026_v1",
+  "template_name": "ОГЭ Математика 19.03.2026 — Вариант 1",
+  "page_size": [
+    2480,
+    3508
+  ],
+  "repers": {
+    "expected_zones": {
+      "top_left": [
+        0.12,
+        0.0,
+        0.34,
+        0.16
+      ],
+      "top_right": [
+        0.76,
+        0.0,
+        1.0,
+        0.16
+      ],
+      "bottom_left": [
+        0.0,
+        0.8,
+        0.2,
+        1.0
+      ],
+      "bottom_right": [
+        0.8,
+        0.8,
+        1.0,
+        1.0
+      ]
+    },
+    "target_points": {
+      "top_left": [
+        0.235,
+        0.047
+      ],
+      "top_right": [
+        0.863,
+        0.047
+      ],
+      "bottom_left": [
+        0.068,
+        0.958
+      ],
+      "bottom_right": [
+        0.953,
+        0.961
+      ]
+    }
+  },
+  "cell_grids": {
+    "code_region": {
+      "x": 572,
+      "y": 366,
+      "cols": 2,
+      "rows": 1,
+      "x_step": 64,
+      "y_step": 1,
+      "cell_width": 63,
+      "cell_height": 86
+    },
+    "code_education_org": {
+      "x": 795,
+      "y": 367,
+      "cols": 6,
+      "rows": 1,
+      "x_step": 64,
+      "y_step": 1,
+      "cell_width": 63,
+      "cell_height": 86
+    },
+    "class_number_letter": {
+      "x": 1264,
+      "y": 368,
+      "cols": 3,
+      "rows": 1,
+      "x_step": 64,
+      "y_step": 1,
+      "cell_width": 63,
+      "cell_height": 86
+    },
+    "code_ppe": {
+      "x": 1604,
+      "y": 369,
+      "cols": 4,
+      "rows": 1,
+      "x_step": 64,
+      "y_step": 1,
+      "cell_width": 63,
+      "cell_height": 86
+    },
+    "auditory_number": {
+      "x": 1903,
+      "y": 370,
+      "cols": 4,
+      "rows": 1,
+      "x_step": 64,
+      "y_step": 1,
+      "cell_width": 63,
+      "cell_height": 86
+    },
+    "participant_surname": {
+      "x": 442,
+      "y": 960,
+      "cols": 30,
+      "rows": 1,
+      "x_step": 64,
+      "y_step": 1,
+      "cell_width": 63,
+      "cell_height": 67,
+      "type": "text",
+      "allowed_chars": "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ-"
+    },
+    "participant_name": {
+      "x": 442,
+      "y": 1048,
+      "cols": 30,
+      "rows": 1,
+      "x_step": 64,
+      "y_step": 1,
+      "cell_width": 63,
+      "cell_height": 67,
+      "type": "text",
+      "allowed_chars": "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ-"
+    },
+    "participant_patronymic": {
+      "x": 442,
+      "y": 1135,
+      "cols": 30,
+      "rows": 1,
+      "x_step": 64,
+      "y_step": 1,
+      "cell_width": 63,
+      "cell_height": 68,
+      "type": "text",
+      "allowed_chars": "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ-"
+    },
+    "answers_left_blank": {
+      "x": 190,
+      "y_positions": [
+        1390,
+        1473,
+        1555,
+        1637,
+        1720,
+        1819,
+        1901,
+        1983,
+        2066,
+        2148,
+        2248,
+        2330,
+        2413,
+        2495,
+        2578,
+        2676,
+        2760
+      ],
+      "cols": 17,
+      "rows": 17,
+      "x_step": 62,
+      "y_step": 1,
+      "cell_width": 61,
+      "cell_height": 67
+    },
+    "answers_right_blank": {
+      "x": 1347,
+      "y_positions": [
+        1392,
+        1475
+      ],
+      "cols": 17,
+      "rows": 2,
+      "x_step": 62,
+      "y_step": 1,
+      "cell_width": 61,
+      "cell_height": 68
+    },
+    "corrections_left_task": {
+      "x": 153,
+      "y_positions": [
+        2932,
+        3012,
+        3093
+      ],
+      "cols": 2,
+      "rows": 3,
+      "x_step": 55,
+      "y_step": 1,
+      "cell_width": 55,
+      "cell_height": 57
+    },
+    "corrections_left_answer": {
+      "x": 291,
+      "y_positions": [
+        2933,
+        3013,
+        3094
+      ],
+      "cols": 17,
+      "rows": 3,
+      "x_step": 55,
+      "y_step": 1,
+      "cell_width": 55,
+      "cell_height": 57
+    },
+    "corrections_right_task": {
+      "x": 1299,
+      "y_positions": [
+        2937,
+        3017,
+        3097
+      ],
+      "cols": 2,
+      "rows": 3,
+      "x_step": 55,
+      "y_step": 1,
+      "cell_width": 55,
+      "cell_height": 57
+    },
+    "corrections_right_answer": {
+      "x": 1437,
+      "y_positions": [
+        2937,
+        3018,
+        3098
+      ],
+      "cols": 17,
+      "rows": 3,
+      "x_step": 55,
+      "y_step": 1,
+      "cell_width": 55,
+      "cell_height": 57
+    }
+  },
+  "answer_blocks": {
+    "left": {
+      "tasks": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "label_zone": [
+        80,
+        1390,
+        190,
+        2845
+      ],
+      "answer_zone": [
+        190,
+        1390,
+        1238,
+        2845
+      ],
+      "row_centers": [
+        1424,
+        1507,
+        1589,
+        1671,
+        1754,
+        1853,
+        1935,
+        2017,
+        2100,
+        2182,
+        2282,
+        2364,
+        2446,
+        2528,
+        2611,
+        2710,
+        2793
+      ],
+      "row_half_height": 34,
+      "cell_count": 17
+    },
+    "right": {
+      "tasks": [
+        18,
+        19
+      ],
+      "label_zone": [
+        1260,
+        1390,
+        1360,
+        1550
+      ],
+      "answer_zone": [
+        1347,
+        1392,
+        2399,
+        1545
+      ],
+      "row_centers": [
+        1426,
+        1509
+      ],
+      "row_half_height": 34,
+      "cell_count": 17
+    }
+  },
+  "corrections": {
+    "left": {
+      "row_band": [
+        140,
+        2920,
+        1230,
+        3170
+      ],
+      "task_zone": [
+        153,
+        2920,
+        263,
+        3170
+      ],
+      "answer_zone": [
+        291,
+        2920,
+        1226,
+        3170
+      ]
+    },
+    "right": {
+      "row_band": [
+        1290,
+        2925,
+        2375,
+        3175
+      ],
+      "task_zone": [
+        1299,
+        2925,
+        1409,
+        3175
+      ],
+      "answer_zone": [
+        1437,
+        2925,
+        2375,
+        3175
+      ]
+    }
+  },
+  "enable_math_answer_healing": true,
+  "enable_answer_key_guidance": true
+}

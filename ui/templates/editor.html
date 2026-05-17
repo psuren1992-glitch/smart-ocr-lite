@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-3">
+        <h4>Template Editor</h4>
+        
+        <div class="mb-3">
+            <label class="form-label">Шаблон</label>
+            <select id="templateSelect" class="form-select">
+                <option value="">Загрузка...</option>
+            </select>
+        </div>
+        
+        <div class="mb-3">
+            <label class="form-label">Фоновое изображение (Aligned)</label>
+            <input type="file" id="bgImageUpload" class="form-control" accept="image/png, image/jpeg">
+            <small class="text-muted">Загрузите p01_aligned.png из модуля калибровки[cite: 154, 155].</small>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Активная зона для редактирования</label>
+            <select id="zoneSelect" class="form-select">
+                <option value="repers.top_left">Репер: Левый верхний</option>
+                <option value="answer_blocks.left.label_zone">Блок 1-17: Зона номеров</option>
+                <option value="answer_blocks.left.answer_zone">Блок 1-17: Зона ответов</option>
+                <option value="corrections.left.row_band">Замены: Полоса поиска (Band)</option>
+            </select>
+        </div>
+
+        <button id="saveBtn" class="btn btn-success w-100">Сохранить шаблон (JSON)</button>
+    </div>
+    
+    <div class="col-md-9">
+        <div style="overflow: auto; height: 80vh; border: 1px solid #ccc; position: relative;">
+            <canvas id="editorCanvas" style="cursor: crosshair;"></canvas>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Базовая логика Canvas редактора
+    const canvas = document.getElementById('editorCanvas');
+    const ctx = canvas.getContext('2d');
+    let currentImage = null;
+    let templateData = {};
+    
+    // Переменные для рисования мышью
+    let isDrawing = false;
+    let startX = 0, startY = 0;
+    
+    // Загрузка фонового изображения [cite: 87, 88]
+    document.getElementById('bgImageUpload').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const img = new Image();
+            img.onload = function() {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                currentImage = img;
+                redrawCanvas();
+            }
+            img.src = event.target.result;
+        }
+        reader.readAsDataURL(file);
+    });
+
+    // Функция перерисовки (фон + сохраненные зоны + текущая рисуемая зона)
+    function redrawCanvas(tempBox = null) {
+        if (currentImage) {
+            ctx.drawImage(currentImage, 0, 0);
+        } else {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        
+        // Здесь в будущем будет логика обхода templateData и отрисовки зеленых/синих квадратов 
+        // для всех существующих зон в JSON (ТЗ 16.3: "отображение текущих зон") [cite: 88, 89]
+        
+        if (tempBox) {
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(tempBox.x, tempBox.y, tempBox.w, tempBox.h);
+        }
+    }
+
+    // События мыши для рисования 
+    canvas.addEventListener('mousedown', (e) => {
+        isDrawing = true;
+        const rect = canvas.getBoundingClientRect();
+        // Учет масштабирования, если canvas отрисован не 1:1
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        startX = (e.clientX - rect.left) * scaleX;
+        startY = (e.clientY - rect.top) * scaleY;
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (!isDrawing) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const currentX = (e.clientX - rect.left) * scaleX;
+        const currentY = (e.clientY - rect.top) * scaleY;
+        
+        const width = currentX - startX;
+        const height = currentY - startY;
+        
+        redrawCanvas({x: startX, y: startY, w: width, h: height});
+    });
+
+    canvas.addEventListener('mouseup', (e) => {
+        if (!isDrawing) return;
+        isDrawing = false;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const endX = (e.clientX - rect.left) * scaleX;
+        const endY = (e.clientY - rect.top) * scaleY;
+        
+        // Нормализация координат (чтобы x1 < x2, y1 < y2)
+        const x1 = Math.round(Math.min(startX, endX));
+        const y1 = Math.round(Math.min(startY, endY));
+        const x2 = Math.round(Math.max(startX, endX));
+        const y2 = Math.round(Math.max(startY, endY));
+        
+        console.log("Новые координаты зоны:", [x1, y1, x2, y2]);
+        // TODO: Логика записи [x1, y1, x2, y2] в выбранный участок templateData
+        
+        redrawCanvas();
+    });
+
+    // Получение списка шаблонов при загрузке
+    fetch('/api/templates')
+        .then(res => res.json())
+        .then(data => {
+            const select = document.getElementById('templateSelect');
+            select.innerHTML = '<option value="">Выберите шаблон...</option>';
+            data.forEach(t => {
+                select.innerHTML += `<option value="${t}">${t}</option>`;
+            });
+        });
+</script>
+{% endblock %}

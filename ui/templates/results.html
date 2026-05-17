@@ -1,0 +1,358 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="mt-4 mb-5">
+    <h2>Результаты проверки</h2>
+    <p class="text-muted">ID работы: <strong>{{ work_id }}</strong></p>
+
+    {% if error %}
+        <div class="alert alert-danger">
+            <h5>Ошибка при обработке</h5>
+            <p class="mb-0">{{ error }}</p>
+        </div>
+    {% elif data and data.pages %}
+        <div class="mb-3 d-flex flex-wrap gap-2">
+            <a class="btn btn-success btn-sm" href="{{ url_for('export_xlsx', work_id=work_id) }}">Скачать Excel ZIP по всем листам</a>
+        </div>
+
+        <div class="card mb-3 shadow-sm">
+            <div class="card-header bg-primary text-white">Пакетная проверка PDF</div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-3"><strong>Файл:</strong><br>{{ data.source_file }}</div>
+                    <div class="col-md-3"><strong>Листов:</strong><br>{{ data.page_count }}</div>
+                    <div class="col-md-3"><strong>Успешно:</strong><br>{{ data.success_count }}</div>
+                    <div class="col-md-3"><strong>Ошибок:</strong><br>{{ data.failed_count }}</div>
+                </div>
+            </div>
+        </div>
+
+        {% for page in data.pages %}
+            <div class="card mb-4 shadow-sm">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>Лист {{ page.page_number }}</strong>
+                        <span class="text-muted">— {{ page.page_name or page.source_file }}</span>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <a class="btn btn-outline-primary btn-sm" href="{{ page.result_url }}">Открыть отдельно</a>
+                        {% if page.result %}
+                            <a class="btn btn-outline-success btn-sm" href="{{ page.export_url }}">Excel</a>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% if page.status == 'failed' or not page.result %}
+                        <div class="alert alert-danger mb-3">
+                            <strong>Ошибка:</strong>
+                            {{ page.error if page.error else "Не удалось обработать лист" }}
+                        </div>
+                    {% else %}
+                        <!-- Информация об участнике -->
+                        <div class="card mb-3 shadow-sm border-info">
+                            <div class="card-body py-2">
+                                <div class="row small">
+                                    <div class="col-md-4"><strong>Фамилия:</strong> {{ page.participant_info.participant_surname or '<не распознано>' }}</div>
+                                    <div class="col-md-4"><strong>Имя:</strong> {{ page.participant_info.participant_name or '<не распознано>' }}</div>
+                                    <div class="col-md-4"><strong>Отчество:</strong> {{ page.participant_info.participant_patronymic or '<не распознано>' }}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-3">
+                                <div class="border rounded p-3 h-100">
+                                    <div class="text-muted small">Баллы</div>
+                                    <div class="fs-4 fw-bold">{{ page.result.correct_count }} / {{ page.result.total_tasks }}</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="border rounded p-3 h-100">
+                                    <div class="text-muted small">Сомнительных клеток</div>
+                                    <div class="fs-4 fw-bold">{{ page.result.doubt_summary.real_doubtful if page.result.doubt_summary else 0 }}</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="border rounded p-3 h-100">
+                                    <div class="text-muted small">Пустых без гипотез</div>
+                                    <div class="fs-4 fw-bold">{{ page.result.doubt_summary.empty_no_hypothesis if page.result.doubt_summary else 0 }}</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="border rounded p-3 h-100">
+                                    <div class="text-muted small">Предупреждения</div>
+                                    <div class="fw-bold">
+                                        {% if page.result.warnings %}
+                                            {{ page.result.warnings|length }}
+                                        {% else %}
+                                            0
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-lg-6">
+                                <div class="card mb-3">
+                                    <div class="card-header">Ответы</div>
+                                    <div class="card-body p-0">
+                                        <table class="table table-sm table-striped mb-0">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th class="ps-3">Задание</th>
+                                                    <th>Ответ</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for task in page.result.answers_raw.keys()|intsort %}
+                                                {% set answer = page.result.answers_raw[task] %}
+                                                <tr>
+                                                    <td class="ps-3">№ {{ task }}</td>
+                                                    <td><strong>{{ answer if answer else "<пусто>" }}</strong></td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-lg-6">
+                                <div class="card mb-3">
+                                    <div class="card-header">Диагностика строк</div>
+                                    <div class="card-body">
+                                        {% set diag_rows = page.result.row_diagnostics if page.result.row_diagnostics else [] %}
+                                        {% if diag_rows %}
+                                            <div class="table-responsive">
+                                                <table class="table table-sm align-middle">
+                                                    <thead class="table-light">
+                                                        <tr>
+                                                            <th>№</th>
+                                                            <th>Ответ</th>
+                                                            <th>Заполнено</th>
+                                                            <th>Распознано</th>
+                                                            <th>Проверки</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {% for row in diag_rows %}
+                                                        <tr>
+                                                            <td>{{ row.task }}</td>
+                                                            <td><strong>{{ row.answer_text if row.answer_text else "<пусто>" }}</strong></td>
+                                                            <td>{{ row.filled_cells_count }}</td>
+                                                            <td>{{ row.recognized_cells_count }}</td>
+                                                            <td>
+                                                                {% if row.validation_notes %}
+                                                                    {{ row.validation_notes|join(", ") }}
+                                                                {% else %}
+                                                                    <span class="text-muted">—</span>
+                                                                {% endif %}
+                                                            </td>
+                                                        </tr>
+                                                        {% endfor %}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        {% else %}
+                                            <p class="text-muted mb-0">Диагностика строк пока не собрана.</p>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {% if page.result.doubt_summary and page.result.doubt_summary.details %}
+                        <div class="card mb-3 border-warning">
+                            <div class="card-header bg-warning-subtle">Реальные сомнения</div>
+                            <div class="card-body">
+                                <ul class="list-group list-group-flush">
+                                    {% for item in page.result.doubt_summary.details %}
+                                    <li class="list-group-item">
+                                        Клетка {{ item.cell }}: <strong>{{ item.symbol if item.symbol else "<пусто>" }}</strong>
+                                        — {{ item.reason }}{% if item.confidence is defined %} ({{ item.confidence }}){% endif %}
+                                    </li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                        </div>
+                        {% endif %}
+                    {% endif %}
+
+                    {% if page.debug_files %}
+                    <div class="card mt-3">
+                        <div class="card-header">Отладочные файлы</div>
+                        <div class="card-body">
+                            <div class="d-flex flex-wrap gap-2">
+                                {% for item in page.debug_files %}
+                                    <a class="btn btn-outline-secondary btn-sm" href="{{ item.url }}" target="_blank">{{ item.label }}</a>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        {% endfor %}
+    {% elif data and (data.status == 'failed' or not data.result) %}
+        <div class="alert alert-danger">
+            <h5>Обработка завершилась с ошибкой</h5>
+            {% if data.error %}
+                <p>{{ data.error }}</p>
+            {% elif data.alignment_meta %}
+                <p>Не удалось выровнять бланк по реперным точкам.</p>
+            {% else %}
+                <p>Пайплайн вернул неполный результат.</p>
+            {% endif %}
+        </div>
+
+        {% if debug_files %}
+        <div class="card mb-3 shadow-sm">
+            <div class="card-header">Отладочные файлы</div>
+            <div class="card-body">
+                <div class="d-flex flex-wrap gap-2">
+                    {% for item in debug_files %}
+                        <a class="btn btn-outline-secondary btn-sm" href="{{ item.url }}" target="_blank">{{ item.label }}</a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    {% elif data %}
+        {# ── Шапка: ФИО + Скачать ── #}
+        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+            <div>
+                <h5 class="mb-1">
+                    {{ data.participant_info.participant_surname or '' }}
+                    {{ data.participant_info.participant_name or '' }}
+                    {{ data.participant_info.participant_patronymic or '' }}
+                    {% if not data.participant_info.participant_surname %}
+                        <span class="text-muted">ФИО не распознано</span>
+                    {% endif %}
+                </h5>
+                <span class="text-muted small">{{ data.template_id }}</span>
+            </div>
+            <a class="btn btn-success" href="{{ url_for('export_xlsx', work_id=work_id) }}">
+                ⬇ Скачать Excel
+            </a>
+        </div>
+
+        {# ── Крупный балл ── #}
+        {% set correct = data.result.correct_count %}
+        {% set total   = data.result.total_tasks %}
+        {% set matched = data.result.matched_keys %}
+        <div class="card shadow mb-4
+            {% if correct is not none and total and correct == total %}border-success
+            {% elif correct is not none %}border-warning{% endif %}">
+            <div class="card-body text-center py-4">
+                {% if correct is not none and total %}
+                    <div class="display-3 fw-bold
+                        {% if correct == total %}text-success
+                        {% elif correct >= total * 0.7 %}text-warning
+                        {% else %}text-danger{% endif %}">
+                        {{ correct }} / {{ total }}
+                    </div>
+                    <div class="text-muted mt-1">заданий выполнено верно</div>
+                {% else %}
+                    <div class="text-muted">Ключ ответов не подключён — баллы не считались</div>
+                {% endif %}
+                {% set doubt = data.result.doubt_summary.real_doubtful if data.result.doubt_summary else 0 %}
+                {% if doubt > 0 %}
+                    <div class="mt-2 text-warning small">⚠ {{ doubt }} клеток вызывают сомнение — проверьте вручную</div>
+                {% endif %}
+            </div>
+        </div>
+
+        {# ── Таблица ответов ── #}
+        <div class="card shadow-sm mb-4">
+            <div class="card-header fw-semibold">Ответы по заданиям</div>
+            <div class="card-body p-0">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3" style="width:70px">Задание</th>
+                            <th>Ответ ученика</th>
+                            {% if matched %}<th>Правильный ответ</th><th style="width:50px"></th>{% endif %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in data.result.answers_raw.keys()|intsort %}
+                            {% set raw = data.result.answers_raw[task] %}
+                            {% set m = matched.get(task) if matched else none %}
+                            {# Показываем исправленный ответ (после heal/bias), если есть; иначе сырой OCR #}
+                            {% set answer = m.student if m and m.student else raw %}
+                            {# Если OCR читал иначе, чем итоговый ответ — покажем сноску #}
+                            {% set ocr_differs = (raw and m and m.student and raw != m.student) %}
+                            <tr class="
+                                {% if m and m.is_correct %}table-success
+                                {% elif m and not m.is_correct %}table-danger
+                                {% endif %}">
+                                <td class="ps-3 text-muted">№ {{ task }}</td>
+                                <td>
+                                    <strong>{{ answer if answer else '—' }}</strong>
+                                    {% if ocr_differs %}
+                                        <span class="text-muted small ms-1" title="OCR прочитал: {{ raw }}">
+                                            <span class="badge bg-secondary bg-opacity-50 fw-normal">OCR: {{ raw }}</span>
+                                        </span>
+                                    {% endif %}
+                                </td>
+                                {% if matched %}
+                                    <td class="text-muted">
+                                        {% if m %}{{ m.correct if m.correct is string else m.correct|join(' / ') }}{% else %}—{% endif %}
+                                    </td>
+                                    <td class="text-center fs-5">
+                                        {% if m and m.is_correct %}✅
+                                        {% elif m and not m.is_correct %}❌
+                                        {% else %}<span class="text-muted">·</span>{% endif %}
+                                    </td>
+                                {% endif %}
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {# ── Сомнительные клетки ── #}
+        {% if data.result.doubt_summary and data.result.doubt_summary.details %}
+        <div class="card mb-3 shadow-sm border-warning">
+            <div class="card-header bg-warning-subtle fw-semibold">⚠ Сомнительные клетки — проверьте вручную</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light"><tr><th class="ps-3">Клетка</th><th>Символ</th><th>Причина</th><th>Уверенность</th></tr></thead>
+                    <tbody>
+                        {% for item in data.result.doubt_summary.details %}
+                        <tr>
+                            <td class="ps-3">{{ item.cell }}</td>
+                            <td><strong>{{ item.symbol or '—' }}</strong></td>
+                            <td class="text-muted small">{{ item.reason }}</td>
+                            <td>{{ "%.0f%%"|format(item.confidence * 100) if item.confidence else '—' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {# ── Отладка ── #}
+        {% if debug_files %}
+        <details>
+            <summary class="text-muted small mb-2">Отладочные файлы</summary>
+            <div class="card shadow-sm mb-3">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap gap-2">
+                        {% for item in debug_files %}
+                            <a class="btn btn-outline-secondary btn-sm" href="{{ item.url }}" target="_blank">{{ item.label }}</a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </details>
+        {% endif %}
+    {% endif %}
+
+    <div class="mt-4">
+        <a href="/" class="btn btn-outline-primary">&larr; Вернуться назад</a>
+    </div>
+</div>
+{% endblock %}

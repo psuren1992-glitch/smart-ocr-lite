@@ -1,0 +1,550 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-3">
+        <h4>Template Editor v2</h4>
+        
+        <div class="mb-3">
+            <label class="form-label">Шаблон</label>
+            <select id="templateSelect" class="form-select">
+                <option value="">Загрузка...</option>
+            </select>
+        </div>
+        
+        <div class="mb-3">
+            <label class="form-label">Фоновое изображение</label>
+            <input type="file" id="bgImageUpload" class="form-control" accept="image/png, image/jpeg">
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Режим</label>
+            <select id="modeSelect" class="form-select">
+                <option value="draw">Рисовать новую зону</option>
+                <option value="move">Перемещать зоны</option>
+                <option value="edit">Редактировать точки</option>
+            </select>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Тип зоны</label>
+            <select id="zoneTypeSelect" class="form-select">
+                <option value="answer_blocks.left.answer_zone">Левая колонка: ответы (1-16)</option>
+                <option value="answer_blocks.left.label_zone">Левая колонка: номера</option>
+                <option value="answer_blocks.right.answer_zone">Правая колонка: ответы (17-19)</option>
+                <option value="answer_blocks.right.label_zone">Правая колонка: номера</option>
+                <option value="corrections.left.answer_zone">Исправления: лево</option>
+                <option value="corrections.right.answer_zone">Исправления: право</option>
+                <option value="repers.top_left">Репер: левый верх</option>
+                <option value="repers.top_right">Репер: правый верх</option>
+                <option value="repers.bottom_left">Репер: левый низ</option>
+                <option value="repers.bottom_right">Репер: правый низ</option>
+            </select>
+        </div>
+
+        <div class="mb-3">
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="snapToGrid" checked>
+                <label class="form-check-label" for="snapToGrid">Прилипать к сетке (20px)</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="showGrid" checked>
+                <label class="form-check-label" for="showGrid">Показывать сетку</label>
+            </div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Пресеты</label>
+            <button id="presetBo1Btn" class="btn btn-outline-primary btn-sm w-100 mb-2">БО №1 (ОГЭ)</button>
+            <button id="clearZonesBtn" class="btn btn-outline-danger btn-sm w-100">Очистить все зоны</button>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">История</label>
+            <div class="btn-group w-100">
+                <button id="undoBtn" class="btn btn-secondary btn-sm">↩️ Отменить</button>
+                <button id="redoBtn" class="btn btn-secondary btn-sm">↪️ Повторить</button>
+            </div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Координаты курсора</label>
+            <div id="coordsDisplay" class="form-control form-control-sm text-muted">X: 0, Y: 0</div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Масштаб: <span id="zoomLevel">100%</span></label>
+            <input type="range" id="zoomSlider" class="form-range" min="25" max="300" value="100">
+            <div class="btn-group w-100 mt-2">
+                <button id="zoomOutBtn" class="btn btn-outline-secondary btn-sm">−</button>
+                <button id="zoomResetBtn" class="btn btn-outline-secondary btn-sm">100%</button>
+                <button id="zoomInBtn" class="btn btn-outline-secondary btn-sm">+</button>
+            </div>
+        </div>
+
+        <button id="saveBtn" class="btn btn-success w-100">💾 Сохранить шаблон</button>
+        
+        <div id="zoneList" class="mt-3">
+            <label class="form-label">Список зон</label>
+            <div id="zoneListContent" class="small"></div>
+        </div>
+    </div>
+    
+    <div class="col-md-9">
+        <div id="canvasContainer" style="overflow: auto; height: 85vh; border: 1px solid #ccc; position: relative; background: #f5f5f5;">
+            <canvas id="editorCanvas" style="cursor: crosshair; background: white;"></canvas>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Canvas and context
+    const canvas = document.getElementById('editorCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvasContainer');
+    
+    // State
+    let currentImage = null;
+    let templateData = {
+        answer_blocks: {
+            left: { tasks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], label_zone: null, answer_zone: null, cell_count: 17 },
+            right: { tasks: [17,18,19], label_zone: null, answer_zone: null, cell_count: 17 }
+        },
+        corrections: {
+            left: { row_band: null, task_zone: null, answer_zone: null },
+            right: { row_band: null, task_zone: null, answer_zone: null }
+        },
+        repers: { expected_zones: {}, etalon_points_rel: {} }
+    };
+    
+    // View state
+    let zoom = 1.0;
+    let panX = 0;
+    let panY = 0;
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    
+    // Drawing state
+    let isDrawing = false;
+    let drawStartX = 0;
+    let drawStartY = 0;
+    let currentBox = null;
+    
+    // History for undo/redo
+    let history = [];
+    let historyIndex = -1;
+    const MAX_HISTORY = 50;
+    
+    // Zone colors
+    const ZONE_COLORS = {
+        'answer_blocks.left.answer_zone': '#28a745',
+        'answer_blocks.left.label_zone': '#20c997',
+        'answer_blocks.right.answer_zone': '#007bff',
+        'answer_blocks.right.label_zone': '#17a2b8',
+        'corrections.left.answer_zone': '#dc3545',
+        'corrections.right.answer_zone': '#e74c3c',
+        'repers.top_left': '#ffc107',
+        'repers.top_right': '#ffc107',
+        'repers.bottom_left': '#ffc107',
+        'repers.bottom_right': '#ffc107'
+    };
+    
+    // Snap to grid
+    function snap(value, gridSize = 20) {
+        if (!document.getElementById('snapToGrid').checked) return value;
+        return Math.round(value / gridSize) * gridSize;
+    }
+    
+    // Convert screen coordinates to canvas coordinates
+    function screenToCanvas(screenX, screenY) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: (screenX - rect.left) / zoom,
+            y: (screenY - rect.top) / zoom
+        };
+    }
+    
+    // Save state to history
+    function saveState() {
+        // Remove future states if we're not at the end
+        if (historyIndex < history.length - 1) {
+            history = history.slice(0, historyIndex + 1);
+        }
+        // Add new state
+        history.push(JSON.parse(JSON.stringify(templateData)));
+        if (history.length > MAX_HISTORY) {
+            history.shift();
+        }
+        historyIndex = history.length - 1;
+        updateHistoryButtons();
+    }
+    
+    // Undo
+    function undo() {
+        if (historyIndex > 0) {
+            historyIndex--;
+            templateData = JSON.parse(JSON.stringify(history[historyIndex]));
+            redrawCanvas();
+            updateZoneList();
+        }
+    }
+    
+    // Redo
+    function redo() {
+        if (historyIndex < history.length - 1) {
+            historyIndex++;
+            templateData = JSON.parse(JSON.stringify(history[historyIndex]));
+            redrawCanvas();
+            updateZoneList();
+        }
+    }
+    
+    function updateHistoryButtons() {
+        document.getElementById('undoBtn').disabled = historyIndex <= 0;
+        document.getElementById('redoBtn').disabled = historyIndex >= history.length - 1;
+    }
+    
+    // Set zone value
+    function setZone(path, value) {
+        const keys = path.split('.');
+        let obj = templateData;
+        for (let i = 0; i < keys.length - 1; i++) {
+            obj = obj[keys[i]];
+        }
+        obj[keys[keys.length - 1]] = value;
+    }
+    
+    // Get zone value
+    function getZone(path) {
+        const keys = path.split('.');
+        let obj = templateData;
+        for (let key of keys) {
+            if (obj === null || obj === undefined) return null;
+            obj = obj[key];
+        }
+        return obj;
+    }
+    
+    // Main redraw function
+    function redrawCanvas() {
+        if (!currentImage) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+        
+        // Set canvas size to match image
+        canvas.width = currentImage.width;
+        canvas.height = currentImage.height;
+        
+        // Clear
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw image
+        ctx.drawImage(currentImage, 0, 0);
+        
+        // Draw grid if enabled
+        if (document.getElementById('showGrid').checked) {
+            drawGrid();
+        }
+        
+        // Draw all zones
+        drawAllZones();
+        
+        // Draw current drawing box
+        if (currentBox) {
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2 / zoom;
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(currentBox.x, currentBox.y, currentBox.w, currentBox.h);
+            ctx.setLineDash([]);
+        }
+    }
+    
+    function drawGrid() {
+        const gridSize = 20;
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.1)';
+        ctx.lineWidth = 1 / zoom;
+        
+        for (let x = 0; x < canvas.width; x += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, canvas.height);
+            ctx.stroke();
+        }
+        
+        for (let y = 0; y < canvas.height; y += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+        }
+    }
+    
+    function drawAllZones() {
+        const zoneTypes = [
+            'answer_blocks.left.answer_zone',
+            'answer_blocks.left.label_zone',
+            'answer_blocks.right.answer_zone',
+            'answer_blocks.right.label_zone',
+            'corrections.left.answer_zone',
+            'corrections.right.answer_zone',
+            'repers.top_left',
+            'repers.top_right',
+            'repers.bottom_left',
+            'repers.bottom_right'
+        ];
+        
+        for (const zoneType of zoneTypes) {
+            const zone = getZone(zoneType);
+            if (zone && Array.isArray(zone) && zone.length === 4) {
+                drawZone(zone, ZONE_COLORS[zoneType] || '#666', zoneType);
+            }
+        }
+    }
+    
+    function drawZone(zone, color, label) {
+        const [x1, y1, x2, y2] = zone;
+        const w = x2 - x1;
+        const h = y2 - y1;
+        
+        // Fill
+        ctx.fillStyle = color + '33'; // 20% opacity
+        ctx.fillRect(x1, y1, w, h);
+        
+        // Border
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2 / zoom;
+        ctx.strokeRect(x1, y1, w, h);
+        
+        // Label
+        ctx.fillStyle = color;
+        ctx.font = `${12 / zoom}px Arial`;
+        ctx.fillText(label.split('.').pop(), x1 + 5, y1 - 5);
+    }
+    
+    // Update zone list display
+    function updateZoneList() {
+        const container = document.getElementById('zoneListContent');
+        container.innerHTML = '';
+        
+        const zoneTypes = [
+            ['answer_blocks.left.answer_zone', 'Левая: ответы'],
+            ['answer_blocks.left.label_zone', 'Левая: номера'],
+            ['answer_blocks.right.answer_zone', 'Правая: ответы'],
+            ['answer_blocks.right.label_zone', 'Правая: номера'],
+            ['corrections.left.answer_zone', 'Исправления: лево'],
+            ['corrections.right.answer_zone', 'Исправления: право']
+        ];
+        
+        for (const [path, name] of zoneTypes) {
+            const zone = getZone(path);
+            const div = document.createElement('div');
+            div.className = 'd-flex justify-content-between align-items-center mb-1';
+            
+            if (zone && Array.isArray(zone)) {
+                div.innerHTML = `
+                    <span class="text-success">✓ ${name}</span>
+                    <small class="text-muted">[${zone.join(', ')}]</small>
+                `;
+            } else {
+                div.innerHTML = `<span class="text-muted">○ ${name}</span>`;
+            }
+            
+            container.appendChild(div);
+        }
+    }
+    
+    // Apply zoom
+    function applyZoom() {
+        canvas.style.width = (canvas.width * zoom) + 'px';
+        canvas.style.height = (canvas.height * zoom) + 'px';
+        document.getElementById('zoomLevel').textContent = Math.round(zoom * 100) + '%';
+        document.getElementById('zoomSlider').value = zoom * 100;
+    }
+    
+    // Event listeners
+    
+    // Image upload
+    document.getElementById('bgImageUpload').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const img = new Image();
+            img.onload = function() {
+                currentImage = img;
+                canvas.width = img.width;
+                canvas.height = img.height;
+                saveState();
+                redrawCanvas();
+                updateZoneList();
+            }
+            img.src = event.target.result;
+        }
+        reader.readAsDataURL(file);
+    });
+    
+    // Canvas mouse events
+    canvas.addEventListener('mousedown', (e) => {
+        const pos = screenToCanvas(e.clientX, e.clientY);
+        const mode = document.getElementById('modeSelect').value;
+        
+        if (mode === 'draw') {
+            isDrawing = true;
+            drawStartX = snap(pos.x);
+            drawStartY = snap(pos.y);
+            currentBox = { x: drawStartX, y: drawStartY, w: 0, h: 0 };
+        }
+    });
+    
+    canvas.addEventListener('mousemove', (e) => {
+        const pos = screenToCanvas(e.clientX, e.clientY);
+        
+        // Update coordinates display
+        document.getElementById('coordsDisplay').textContent = `X: ${Math.round(pos.x)}, Y: ${Math.round(pos.y)}`;
+        
+        if (isDrawing && currentBox) {
+            const currentX = snap(pos.x);
+            const currentY = snap(pos.y);
+            
+            currentBox.x = Math.min(drawStartX, currentX);
+            currentBox.y = Math.min(drawStartY, currentY);
+            currentBox.w = Math.abs(currentX - drawStartX);
+            currentBox.h = Math.abs(currentY - drawStartY);
+            
+            redrawCanvas();
+        }
+    });
+    
+    canvas.addEventListener('mouseup', (e) => {
+        if (!isDrawing || !currentBox) return;
+        
+        isDrawing = false;
+        
+        // Only save if box is large enough
+        if (currentBox.w > 10 && currentBox.h > 10) {
+            const zoneType = document.getElementById('zoneTypeSelect').value;
+            const coords = [
+                Math.round(currentBox.x),
+                Math.round(currentBox.y),
+                Math.round(currentBox.x + currentBox.w),
+                Math.round(currentBox.y + currentBox.h)
+            ];
+            
+            setZone(zoneType, coords);
+            saveState();
+            updateZoneList();
+        }
+        
+        currentBox = null;
+        redrawCanvas();
+    });
+    
+    // Zoom controls
+    document.getElementById('zoomSlider').addEventListener('input', (e) => {
+        zoom = parseInt(e.target.value) / 100;
+        applyZoom();
+    });
+    
+    document.getElementById('zoomInBtn').addEventListener('click', () => {
+        zoom = Math.min(zoom * 1.25, 3.0);
+        applyZoom();
+    });
+    
+    document.getElementById('zoomOutBtn').addEventListener('click', () => {
+        zoom = Math.max(zoom / 1.25, 0.25);
+        applyZoom();
+    });
+    
+    document.getElementById('zoomResetBtn').addEventListener('click', () => {
+        zoom = 1.0;
+        applyZoom();
+    });
+    
+    // History buttons
+    document.getElementById('undoBtn').addEventListener('click', undo);
+    document.getElementById('redoBtn').addEventListener('click', redo);
+    
+    // Preset buttons
+    document.getElementById('presetBo1Btn').addEventListener('click', () => {
+        if (!currentImage) {
+            alert('Сначала загрузите изображение');
+            return;
+        }
+        
+        const w = currentImage.width;
+        const h = currentImage.height;
+        
+        // BO1 preset proportions
+        templateData.answer_blocks.left.answer_zone = [Math.round(w*0.25), Math.round(h*0.25), Math.round(w*0.45), Math.round(h*0.60)];
+        templateData.answer_blocks.left.label_zone = [Math.round(w*0.10), Math.round(h*0.25), Math.round(w*0.24), Math.round(h*0.60)];
+        templateData.answer_blocks.right.answer_zone = [Math.round(w*0.55), Math.round(h*0.25), Math.round(w*0.95), Math.round(h*0.45)];
+        templateData.answer_blocks.right.label_zone = [Math.round(w*0.52), Math.round(h*0.25), Math.round(w*0.54), Math.round(h*0.45)];
+        templateData.corrections.left.answer_zone = [Math.round(w*0.15), Math.round(h*0.67), Math.round(w*0.45), Math.round(h*0.73)];
+        templateData.corrections.right.answer_zone = [Math.round(w*0.55), Math.round(h*0.67), Math.round(w*0.85), Math.round(h*0.73)];
+        
+        saveState();
+        redrawCanvas();
+        updateZoneList();
+    });
+    
+    document.getElementById('clearZonesBtn').addEventListener('click', () => {
+        templateData = {
+            answer_blocks: {
+                left: { tasks: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16], label_zone: null, answer_zone: null, cell_count: 17 },
+                right: { tasks: [17,18,19], label_zone: null, answer_zone: null, cell_count: 17 }
+            },
+            corrections: {
+                left: { row_band: null, task_zone: null, answer_zone: null },
+                right: { row_band: null, task_zone: null, answer_zone: null }
+            },
+            repers: { expected_zones: {}, etalon_points_rel: {} }
+        };
+        saveState();
+        redrawCanvas();
+        updateZoneList();
+    });
+    
+    // Save button
+    document.getElementById('saveBtn').addEventListener('click', () => {
+        const templateId = prompt('Введите ID шаблона:', 'bo1_manual_' + Date.now());
+        if (!templateId) return;
+        
+        const output = {
+            template_id: templateId,
+            template_name: 'Ручная калибровка ' + templateId,
+            page_size: [2480, 3508],
+            ...templateData
+        };
+        
+        const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = templateId + '.json';
+        a.click();
+        URL.revokeObjectURL(url);
+    });
+    
+    // Checkbox changes
+    document.getElementById('snapToGrid').addEventListener('change', redrawCanvas);
+    document.getElementById('showGrid').addEventListener('change', redrawCanvas);
+    
+    // Load templates
+    fetch('/api/templates')
+        .then(res => res.json())
+        .then(data => {
+            const select = document.getElementById('templateSelect');
+            select.innerHTML = '<option value="">Новый шаблон...</option>';
+            data.forEach(t => {
+                select.innerHTML += `<option value="${t}">${t}</option>`;
+            });
+        });
+    
+    // Initialize
+    saveState();
+    updateHistoryButtons();
+</script>
+{% endblock %}

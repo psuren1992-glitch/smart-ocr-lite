@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-7">
+        <div class="alert alert-info shadow-sm mb-3">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <strong>Текущий сканер:</strong> AI-ready + распознавание ФИО
+                </div>
+                {% if latest_result %}
+                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('result_view', work_id=latest_result.work_id) }}">
+                    Открыть последний результат
+                </a>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if latest_result %}
+        <div class="card shadow-sm mb-3 border-success">
+            <div class="card-body">
+                <h6 class="card-title mb-3">Последний запуск</h6>
+                <div><strong>Файл:</strong> {{ latest_result.source_file }}</div>
+                <div>
+                    <strong>ФИО:</strong>
+                    {% set fio = [latest_result.participant_surname, latest_result.participant_name, latest_result.participant_patronymic] | reject('equalto', '') | list %}
+                    {{ fio | join(' ') if fio else 'не распознано' }}
+                </div>
+                <div>
+                    <strong>Баллы:</strong>
+                    {{ latest_result.correct_count if latest_result.correct_count is not none else '—' }}
+                    /
+                    {{ latest_result.total_tasks if latest_result.total_tasks is not none else '—' }}
+                </div>
+                <div><strong>Обновлено:</strong> {{ latest_result.processed_at }}</div>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <h4 class="card-title mb-4">Проверка бланков ответов</h4>
+                <form action="/process" method="POST" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="template_id" class="form-label fw-semibold">Вариант / шаблон</label>
+                        <select class="form-select" id="template_id" name="template_id" required>
+                            <option value="">— Загрузка вариантов... —</option>
+                        </select>
+                        <div class="form-text">Выберите вариант задания, который был у ученика</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="file" class="form-label fw-semibold">Скан бланка</label>
+                        <input class="form-control" type="file" id="file" name="file"
+                               accept=".jpg,.jpeg,.png,.pdf" required>
+                        <div class="form-text">JPG, PNG или PDF (один бланк — одна страница)</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100 py-2 fs-5">
+                        ▶ Проверить бланк
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <details class="mt-2">
+            <summary class="text-muted small">Дополнительно</summary>
+            <div class="card shadow-sm mt-2">
+                <div class="card-body py-2">
+                    <form action="/process" method="POST" enctype="multipart/form-data" id="advanced_form">
+                        <input type="hidden" name="template_id" id="adv_template_id">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="ocr_truth_mode" name="ocr_truth_mode" value="1">
+                            <label class="form-check-label small" for="ocr_truth_mode">
+                                OCR truth mode (отключить подсказки ключа ответов)
+                            </label>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </details>
+    </div>
+</div>
+
+<script>
+    fetch('/api/templates')
+        .then(res => res.json())
+        .then(data => {
+            const select = document.getElementById('template_id');
+            select.innerHTML = '<option value="">— Выберите вариант —</option>';
+
+            // Группируем по полю group (берётся из имени шаблона до " — ")
+            let lastGroup = null;
+            data.forEach(t => {
+                const group = t.group || 'Другие шаблоны';
+                if (group !== lastGroup) {
+                    if (lastGroup !== null) select.innerHTML += `</optgroup>`;
+                    select.innerHTML += `<optgroup label="${group}">`;
+                    lastGroup = group;
+                }
+                select.innerHTML += `<option value="${t.id}">${t.name}</option>`;
+            });
+            if (lastGroup !== null) select.innerHTML += `</optgroup>`;
+
+            // Выбрать последний использованный (если сохранён)
+            const saved = localStorage.getItem('last_template');
+            if (saved) select.value = saved;
+        })
+        .catch(err => console.error('Ошибка загрузки шаблонов:', err));
+
+    // Запомнить выбор
+    document.getElementById('template_id').addEventListener('change', function() {
+        localStorage.setItem('last_template', this.value);
+    });
+</script>
+{% endblock %}

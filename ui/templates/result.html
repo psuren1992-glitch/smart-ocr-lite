@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="mt-4 mb-5">
+    <h2>Результаты проверки</h2>
+    <p class="text-muted">ID работы: <strong>{{ work_id }}</strong></p>
+    
+    {% if error %}
+        <div class="alert alert-danger">
+            <h5>Ошибка при обработке:</h5>
+            <p>{{ error }}</p>
+        </div>
+    {% elif data %}
+        <!-- Информация об участнике -->
+        <div class="card mb-4 shadow-sm border-info">
+            <div class="card-header bg-info text-dark fw-bold">Участник</div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4"><strong>Фамилия:</strong> {{ data.participant_info.participant_surname or '<не распознано>' }}</div>
+                    <div class="col-md-4"><strong>Имя:</strong> {{ data.participant_info.participant_name or '<не распознано>' }}</div>
+                    <div class="col-md-4"><strong>Отчество:</strong> {{ data.participant_info.participant_patronymic or '<не распознано>' }}</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-primary text-white">Распознанные ответы</div>
+                    <div class="card-body p-0">
+                        <table class="table table-striped table-sm mb-0">
+                            <thead class="table-light">
+                                <tr><th class="ps-3">Задание</th><th>Ответ</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for task, answer in data.result.answers_raw.items() %}
+                                <tr>
+                                    <td class="ps-3">№ {{ task }}</td>
+                                    <td><strong>{{ answer if answer else '<пусто>' }}</strong></td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card mb-3 shadow-sm border-warning">
+                    <div class="card-header bg-warning text-dark fw-bold">⚠️ Проблемные зоны</div>
+                    <div class="card-body">
+                        {% if data.result.doubtful_cells %}
+                            <ul class="list-group list-group-flush">
+                            {% for cell in data.result.doubtful_cells %}
+                                <li class="list-group-item">
+                                    Задание <strong>{{ cell.task }}</strong>: '{{ cell.symbol }}' 
+                                    (Причина: {{ cell.reason }})
+                                </li>
+                            {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="text-success mb-0 fw-bold">✓ Ошибок не обнаружено</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+    
+    <div class="mt-4">
+        <a href="/" class="btn btn-outline-primary">&larr; Вернуться назад</a>
+    </div>
+</div>
+{% endblock %}
