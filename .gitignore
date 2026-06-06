@@ -9,6 +9,8 @@ data/labeling/
 data/uploads/
 data/results/
 debug_crops/
+tests/scans/*.png
+tests/scans/*.jpg
 
 # Скрипты для локального тестирования — не нужны пользователям
 test_run.py

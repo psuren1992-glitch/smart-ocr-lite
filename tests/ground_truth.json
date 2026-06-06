@@ -1,0 +1,43 @@
+{
+  "_comment": "Эталонные ответы для регрессионных тестов. Источник: ручная проверка + автодетекция по ключу ответов.",
+  "_how_to_add": "Добавь новый бланк: имя файла (относительно tests/scans/), вариант, и ответы которые OCR ДОЛЖЕН читать.",
+  "blanks": [
+    {
+      "id": "blank_01",
+      "file": "scans/blank_01.png",
+      "variant": "bo1_oge_math_2026_v6",
+      "participant_surname": "ПЕРКОВА",
+      "confidence": "high",
+      "_note": "9/13 заполненных заданий совпали с ключом V6",
+      "expected_answers": {
+        "6":  "-2,3",
+        "7":  "4",
+        "9":  "0,5",
+        "10": "0,78",
+        "11": "213",
+        "14": "24",
+        "15": "0,6",
+        "17": "30",
+        "18": "18"
+      }
+    },
+    {
+      "id": "blank_05",
+      "file": "scans/blank_05.png",
+      "variant": "bo1_oge_math_2026_v3",
+      "participant_surname": "НЕСТЕРОВ",
+      "confidence": "medium",
+      "_note": "6/19 заполненных совпали с ключом V3. Нужна ручная проверка.",
+      "expected_answers": {}
+    },
+    {
+      "id": "blank_08",
+      "file": "scans/blank_08.png",
+      "variant": "bo1_oge_math_2026_v3",
+      "participant_surname": "КИРЬЯКОВ",
+      "confidence": "high",
+      "_note": "8/19 совпали с ключом V3. Бланк ранее проверен вручную.",
+      "expected_answers": {}
+    }
+  ]
+}
