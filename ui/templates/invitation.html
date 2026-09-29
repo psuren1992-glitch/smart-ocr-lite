@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% block title %}Приглашение · Бланки{% endblock %}{% block content %}
+<a class="back" href="{{ url_for('admin_schools') }}">← Школы и доступ</a><section class="paper auth-card invitation-card"><p class="eyebrow">ПРИГЛАШЕНИЕ СОЗДАНО</p><h1>Доступ для учителя</h1><p class="delete-title">{{ school.name }}</p><p>Одно приглашение для одного учителя. Срок действия — 48 часов. После регистрации код больше не работает.</p>
+{% if local_only %}<div class="notice">Пока это локальная ссылка: она работает только на этом ПК. Не отправляйте её школам до настройки внешнего HTTPS-адреса.</div>{% endif %}
+<label>Ссылка для регистрации<input readonly value="{{ link }}" data-copy-source="invite-link" id="invite-link"></label><button class="button" type="button" data-copy="invite-link">Копировать ссылку</button>
+<details><summary>Отдельный код приглашения</summary><code class="invite-code">{{ code }}</code></details>
+<p class="caption muted">Ссылка показана только сейчас. Не публикуйте её в общем чате. Если потеряли ссылку, отзовите приглашение и создайте новое.</p></section>
+{% endblock %}

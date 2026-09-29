@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% block title %}Корзина · Бланки{% endblock %}{% block content %}
+<a class="back" href="{{ url_for('index') }}">← Ваши работы</a><h1>Корзина</h1>
+<p class="lead">Корзина доступна только координатору. Через 3 дня (72 часа) после удаления исходный PDF, сканы, ответы и ключи будут удалены без возможности восстановления из приложения.</p>
+<p class="muted">Очистка выполняется каждую минуту, пока приложение работает, и при запуске после простоя. Отдельные резервные копии эта очистка не затрагивает.</p>
+<section class="history"><div class="section-heading"><h2>Удалённые работы</h2><span>{{ works|length }} всего</span></div>
+{% if works %}<div class="work-list">{% for w in works %}<div class="work-item trash-item"><span class="work-symbol">{{ w.class_name or '9' }}</span><span class="work-name"><strong>{{ w.title }}</strong><small>{{ w.count }} бланков</small><small>{% if w.purge_date %}Окончательное удаление: {{ w.purge_date }}{% else %}Дата удаления повреждена: автоочистка приостановлена{% endif %}</small></span>{% if w.expired %}<span class="muted">Ожидает очистки</span>{% else %}<form method="post" action="{{ url_for('restore_work',work_id=w.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button" type="submit" aria-label="Восстановить работу {{ w.title }}">Восстановить</button></form>{% endif %}</div>{% endfor %}</div>{% else %}<div class="empty">Корзина пуста.</div>{% endif %}</section>
+{% endblock %}

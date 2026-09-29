@@ -1,0 +1,32 @@
+{
+	admin 127.0.0.1:2019
+	http_port 8080
+	https_port 8443
+	default_sni {$BLANKS_PUBLIC_HOST}
+	servers {
+		protocols h1 h2
+	}
+	auto_https disable_redirects
+	storage file_system {
+		root .secrets/caddy
+	}
+}
+
+http://{$BLANKS_PUBLIC_HOST}:8080 {
+	bind {$BLANKS_LAN_IP}
+	redir https://{$BLANKS_PUBLIC_HOST}{uri} 308
+}
+
+https://{$BLANKS_PUBLIC_HOST}:8443 {
+	bind {$BLANKS_LAN_IP}
+	tls {
+		issuer acme {
+			dir https://acme-v02.api.letsencrypt.org/directory
+			profile shortlived
+		}
+	}
+	header -Server
+	reverse_proxy 127.0.0.1:5001 {
+		header_up Host {$BLANKS_PUBLIC_HOST}
+	}
+}

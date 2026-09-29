@@ -1,0 +1,9 @@
+{
+	admin off
+	auto_https off
+}
+http://127.0.0.1:8088 {
+	bind 127.0.0.1
+	header -Server
+	respond "BLANKS-LOCAL-READY" 200
+}

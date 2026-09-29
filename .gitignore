@@ -23,3 +23,32 @@ debug_cells.py
 *.png.bak
 .vscode/
 .idea/
+
+# Тестовые данные (не для репо)
+tests/test_roster.xlsx
+tests/test_batch.pdf
+data/ocr_sessions.db
+data/math9/
+.venv/
+output/playwright/
+.playwright-cli/
+tools/caddy/
+
+# Private runtime data and machine-specific deployment configuration
+data/
+output/
+.env.*
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.pem
+*.key
+*.pfx
+*.zip
+*.partial
+deploy/Caddyfile.portal
+deploy/Caddyfile.probe
+deploy/probe-firewall.ps1
+run_server_https.bat
+docs/server-test.md

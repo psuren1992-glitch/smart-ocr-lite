@@ -1,0 +1,9 @@
+{% extends 'base.html' %}{% block title %}Удалить работу · Бланки{% endblock %}{% block content %}
+<a class="back" href="{{ url_for('index') }}">← Ваши работы</a>
+<section class="paper delete-card">
+<p class="eyebrow">ПОДТВЕРЖДЕНИЕ</p><h1>Удалить работу?</h1>
+<p class="delete-title">{{ work.title }}</p><p class="muted">{{ work.class_name }} · {{ work.count }} бланков</p>
+<p>Работа исчезнет из списка «Ваши работы» и попадёт в корзину. Только координатор сможет восстановить её в течение 3 дней (72 часов).</p>
+<p class="muted">Затем исходный PDF, сканы, ответы и ключи автоматически удалятся с диска без возможности восстановления из приложения. Если удалили по ошибке, сразу обратитесь к координатору.</p>
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><div class="actions"><a class="button" href="{{ url_for('index') }}">Оставить работу</a><button class="button danger" name="confirm" value="yes" type="submit">В корзину</button></div></form>
+</section>{% endblock %}

@@ -1,422 +1,458 @@
+"""Math 9: upload a PDF, check each answer against its crop, export results."""
+import csv
+import io
 import json
 import logging
 import os
+import re
+import secrets
+import shutil
+import threading
 import uuid
-import zipfile
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file, send_from_directory, url_for
+import cv2
+import fitz
+import numpy as np
+from flask import Flask, abort, flash, g, redirect, render_template, request, send_file, session, url_for
+from werkzeug.exceptions import SecurityError
 
-from core.answer_key import load_answer_key
-from core.excel_report import ExcelReportGenerator
-from core.ocr_factory import build_default_symbol_classifier
-from core.pdf_loader import PdfLoader
-from core.pipeline import DocumentProcessorPipeline
+from core.answer_key import normalize_answer
+from core.math_form import form_config, recognize_page, write_image
+from core.accounts import Accounts, can_access
+from core.account_views import install_accounts
+from core.trash import TrashCleaner, expires_at
+from core.work_profiles import EXAMS, SUBJECTS, profile_for
 
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+ROOT = Path(__file__).resolve().parent
+TASKS = tuple(str(i) for i in range(1, 20))
+LOCK = threading.RLock()
+EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='math-ocr')
+ACTIVE = set()
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__, template_folder="ui/templates", static_folder="ui/static")
+
+def read_json(path):
+    return json.loads(path.read_text(encoding='utf-8'))
 
 
-@app.template_filter("intsort")
-def intsort_filter(keys):
-    """Sort dict keys as integers (for task numbers 1-19)."""
-    try:
-        return sorted(keys, key=int)
-    except (ValueError, TypeError):
-        return sorted(keys)
+def write_json(path, data):
+    with LOCK:
+        temp = path.with_suffix('.tmp')
+        with temp.open('w', encoding='utf-8') as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temp.replace(path)
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "data", "uploads")
-RESULTS_FOLDER = os.path.join(BASE_DIR, "data", "results")
-DEBUG_CROPS = os.path.join(BASE_DIR, "debug_crops")
-TEMPLATES_DIR = os.path.join(BASE_DIR, "config", "templates")
-ANSWER_KEYS_DIR = os.path.join(BASE_DIR, "config", "answer_keys")
-
-# --- Лимиты ---
-# Максимальный размер загружаемого файла: 50 MB
-MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH_MB", 50)) * 1024 * 1024
-# Лимит запросов на один IP: 10 запросов в минуту
-RATE_LIMIT_PER_MINUTE = int(os.environ.get("RATE_LIMIT_PER_MINUTE", 10))
-RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", 60))
-# Допустимые расширения файлов
-ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".pdf"}
-# Хранилище rate limiter'а: IP -> [(timestamp), ...]
-_request_log: dict[str, list[float]] = {}
-# ---------------
-
-app.config.update(
-    UPLOAD_FOLDER=UPLOAD_FOLDER,
-    RESULTS_FOLDER=RESULTS_FOLDER,
-    DEBUG_CROPS=DEBUG_CROPS,
-    TEMPLATES_DIR=TEMPLATES_DIR,
-    ANSWER_KEYS_DIR=ANSWER_KEYS_DIR,
-    MAX_CONTENT_LENGTH=MAX_CONTENT_LENGTH,
-)
-
-for folder in [UPLOAD_FOLDER, RESULTS_FOLDER, DEBUG_CROPS, ANSWER_KEYS_DIR]:
-    os.makedirs(folder, exist_ok=True)
-
-TESSERACT_CMD = os.environ.get("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
-DEFAULT_PORT = 5001
-
-
-def _truthy(value) -> bool:
-    if value is None:
-        return False
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def build_pipeline_for_webapp(
-    template_path: str,
-    debug_dir: str = DEBUG_CROPS,
-    ocr_truth_mode: bool | None = None,
-) -> DocumentProcessorPipeline:
-    with open(template_path, "r", encoding="utf-8") as f:
-        template_data = json.load(f)
-
-    answer_key_path = os.path.join(app.config["ANSWER_KEYS_DIR"], os.path.basename(template_path))
-    answer_key = load_answer_key(answer_key_path)
-    use_truth_mode = _truthy(os.environ.get("OCR_TRUTH_MODE")) if ocr_truth_mode is None else bool(ocr_truth_mode)
-
-    classifier = build_default_symbol_classifier(
-        tesseract_cmd=TESSERACT_CMD,
-        doubt_threshold=0.65,
-        include_hog_svm=True,
-        include_paddleocr=True,
-        include_google_vision=False,
-        include_google_docai=False,
-    )
-
-    return DocumentProcessorPipeline(
-        template_data,
-        answer_key,
-        classifier,
-        debug_dir=debug_dir,
-        ocr_truth_mode=use_truth_mode,
-    )
-
-
-def build_debug_files(debug_root: str, work_id: str):
-    debug_files = []
-    debug_dir = os.path.join(debug_root, work_id)
-    for filename, label in [
-        ("input.png", "Исходное изображение"),
-        ("preprocessed.png", "После предобработки"),
-        ("aligned.png", "Выровненный скан"),
-        ("row_overlay.png", "Разметка строк и клеток"),
-        ("template_cells_overlay.png", "Эталонная карта ячеек"),
-        ("meta.json", "Debug JSON"),
-    ]:
-        if os.path.exists(os.path.join(debug_dir, filename)):
-            debug_files.append(
-                {
-                    "label": label,
-                    "url": url_for("custom_static", filename=f"{work_id}/{filename}"),
-                }
-            )
-    return debug_files
-
-
-def save_result_json(result: dict, work_id: str) -> str:
-    result_path = os.path.join(app.config["RESULTS_FOLDER"], f"{work_id}.json")
-    with open(result_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=4)
-    return result_path
-
-
-def get_latest_result_summary() -> dict | None:
-    results_dir = Path(app.config["RESULTS_FOLDER"])
-    candidates = [path for path in results_dir.glob("*.json") if path.is_file()]
-    if not candidates:
+def grade(page, keys):
+    key = keys.get(page.get('variant', '1'), {})
+    if not key or not page.get('reviewed'):
         return None
+    correct = sum(bool(page['answers'].get(t)) and normalize_answer(page['answers'][t]) in
+                  [normalize_answer(x) for x in value.split('|')] for t, value in key.items() if value)
+    return {'correct': correct, 'total': sum(bool(v) for v in key.values())}
 
-    latest_path = max(candidates, key=lambda path: path.stat().st_mtime)
+
+def run_work(folder):
     try:
-        with latest_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    first_page = data.get("pages", [{}])[0] if data.get("pages") else data
-    participant = first_page.get("participant_info") or data.get("participant_info") or {}
-    result_payload = first_page.get("result") or data.get("result") or {}
-    source_file = first_page.get("source_file") or data.get("source_file") or latest_path.name
-
-    return {
-        "work_id": first_page.get("work_id") or data.get("work_id") or latest_path.stem,
-        "source_file": source_file,
-        "participant_surname": participant.get("participant_surname") or "",
-        "participant_name": participant.get("participant_name") or "",
-        "participant_patronymic": participant.get("participant_patronymic") or "",
-        "correct_count": result_payload.get("correct_count"),
-        "total_tasks": result_payload.get("total_tasks"),
-        "processed_at": datetime.fromtimestamp(latest_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
-    }
-
-
-def _uploaded_file_is_empty(file_storage) -> bool:
-    if file_storage is None:
-        return True
-
-    content_length = getattr(file_storage, "content_length", None)
-    if content_length is not None and content_length > 0:
-        return False
-
-    stream = getattr(file_storage, "stream", None)
-    if stream is None:
-        return content_length in (None, 0)
-
-    try:
-        current_pos = stream.tell()
-        stream.seek(0, os.SEEK_END)
-        size = stream.tell()
-        stream.seek(current_pos, os.SEEK_SET)
-        return size <= 0
-    except (AttributeError, OSError, ValueError):
-        return False
-
-
-def process_pdf_pages(pdf_path: str, work_id: str, pipeline: DocumentProcessorPipeline) -> dict:
-    loader = PdfLoader(dpi=300)
-    try:
-        pages = loader.load_pdf_as_images(pdf_path)
-    except FileNotFoundError:
-        logger.error("PDF file not found while processing batch: %s", pdf_path)
-        raise
-    if not pages:
-        raise RuntimeError("PDF пуст или не удалось извлечь страницы")
-
-    batch_pages = []
-    for page_index, (page_name, page_image) in enumerate(pages, start=1):
-        page_work_id = f"{work_id}_p{page_index:02d}"
-        temp_img_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{page_work_id}.png")
-        try:
-            import cv2
-
-            cv2.imwrite(temp_img_path, page_image)
-            page_result = pipeline.process(temp_img_path, page_work_id, save_debug=True)
-            page_result["source_file"] = page_name
-            page_result["page_number"] = page_index
-            page_result["page_name"] = page_name
-            page_result["batch_parent_id"] = work_id
-            save_result_json(page_result, page_work_id)
-            batch_pages.append(page_result)
-        finally:
-            if os.path.exists(temp_img_path):
-                os.remove(temp_img_path)
-
-    success_count = sum(1 for page in batch_pages if page.get("result") and page.get("status") != "failed")
-    failed_count = len(batch_pages) - success_count
-    return {
-        "work_id": work_id,
-        "timestamp": datetime.now().isoformat(),
-        "template_id": pipeline.template.get("template_id"),
-        "source_file": os.path.basename(pdf_path),
-        "batch": True,
-        "page_count": len(batch_pages),
-        "success_count": success_count,
-        "failed_count": failed_count,
-        "pages": batch_pages,
-    }
-
-
-@app.route("/")
-def index():
-    try:
-        templates = [f for f in os.listdir(app.config["TEMPLATES_DIR"]) if f.endswith(".json")]
-    except OSError:
-        templates = []
-    latest_result = get_latest_result_summary()
-    return render_template("index.html", templates=templates, latest_result=latest_result)
-
-
-@app.route("/process", methods=["POST"])
-def process_file():
-    rate_limit_response = _check_rate_limit()
-    if rate_limit_response is not None:
-        return rate_limit_response
-
-    if "file" not in request.files:
-        return jsonify({"error": "Файл не найден в запросе."}), 400
-
-    file = request.files["file"]
-    template_id = request.form.get("template_id")
-    if not file.filename:
-        return jsonify({"error": "Имя файла не указано."}), 400
-    if not template_id:
-        return jsonify({"error": "Не указан template_id."}), 400
-
-    work_id = str(uuid.uuid4())[:8]
-    file_ext = os.path.splitext(file.filename)[1].lower()
-
-    # Проверка расширения
-    if file_ext not in ALLOWED_EXTENSIONS:
-        logger.warning("Отклонён файл с недопустимым расширением: %s", file_ext)
-        return jsonify({"error": f"Недопустимое расширение файла: {file_ext}. Разрешены: {', '.join(sorted(ALLOWED_EXTENSIONS))}"}), 400
-
-    # Проверка пустого файла
-    if _uploaded_file_is_empty(file):
-        logger.warning("Отклонён пустой файл: %s", file.filename)
-        return jsonify({"error": "Файл пуст. Загрузите непустой файл."}), 400
-
-    save_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{work_id}{file_ext}")
-    file.save(save_path)
-
-    try:
-        template_filename = template_id if template_id.endswith(".json") else f"{template_id}.json"
-        template_path = os.path.join(app.config["TEMPLATES_DIR"], template_filename)
-        ocr_truth_mode = _truthy(request.form.get("ocr_truth_mode")) or _truthy(request.args.get("ocr_truth_mode"))
-        pipeline = build_pipeline_for_webapp(
-            template_path,
-            app.config["DEBUG_CROPS"],
-            ocr_truth_mode=ocr_truth_mode,
-        )
-
-        if file_ext == ".pdf":
-            result = process_pdf_pages(save_path, work_id, pipeline)
-        else:
-            result = pipeline.process(save_path, work_id, save_debug=True)
-
-        save_result_json(result, work_id)
-        return redirect(url_for("result_view", work_id=work_id))
-    except FileNotFoundError as exc:
-        logger.error("Файл не найден: %s", exc)
-        return jsonify({"error": str(exc)}), 400
-    except Exception as exc:
-        logger.error("Ошибка обработки файла", exc_info=True)
-        return render_template("results.html", work_id=work_id, error=str(exc))
-
-
-@app.route("/result/<work_id>")
-def result_view(work_id):
-    result_path = os.path.join(app.config["RESULTS_FOLDER"], f"{work_id}.json")
-    if not os.path.exists(result_path):
-        return render_template("results.html", work_id=work_id, error="Результаты не найдены")
-
-    with open(result_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if data.get("pages"):
-        for page in data["pages"]:
-            page_work_id = page.get("work_id", "")
-            page["debug_files"] = build_debug_files(app.config["DEBUG_CROPS"], page_work_id)
-            page["result_url"] = url_for("result_view", work_id=page_work_id)
-            page["export_url"] = url_for("export_xlsx", work_id=page_work_id)
-        debug_files = []
-    else:
-        debug_files = build_debug_files(app.config["DEBUG_CROPS"], work_id)
-
-    return render_template("results.html", data=data, work_id=work_id, debug_files=debug_files)
-
-
-@app.route("/result/<work_id>/export.xlsx")
-def export_xlsx(work_id):
-    result_path = os.path.join(app.config["RESULTS_FOLDER"], f"{work_id}.json")
-    if not os.path.exists(result_path):
-        return render_template("results.html", work_id=work_id, error="Результаты не найдены")
-
-    with open(result_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    export_dir = os.path.join(app.config["RESULTS_FOLDER"], "xlsx")
-    os.makedirs(export_dir, exist_ok=True)
-
-    if data.get("pages"):
-        zip_path = os.path.join(export_dir, f"{work_id}_results.zip")
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-            for page in data["pages"]:
-                if page.get("status") == "failed" or not page.get("result"):
+        meta = read_json(folder / 'work.json')
+        if meta.get('deleted_at') or not profile_for(meta)['supported']:
+            return
+        meta['queue_state'] = 'processing'
+        write_json(folder / 'work.json', meta)
+        with fitz.open(folder / 'source.pdf') as doc:
+            for number in range(1, len(doc)+1):
+                page_dir = folder / str(number)
+                page_dir.mkdir(exist_ok=True)
+                path = page_dir / 'page.json'
+                if path.exists() and read_json(path).get('status') in ('ready', 'error'):
                     continue
-                page_work_id = page.get("work_id")
-                page_xlsx_path = os.path.join(export_dir, f"{page_work_id}_results.xlsx")
-                ExcelReportGenerator().generate_result_xlsx(page, page_xlsx_path)
-                archive.write(page_xlsx_path, arcname=os.path.basename(page_xlsx_path))
-        return send_file(zip_path, as_attachment=True, download_name=f"{work_id}_results.zip", mimetype="application/zip")
-
-    output_path = os.path.join(export_dir, f"{work_id}_results.xlsx")
-    ExcelReportGenerator().generate_result_xlsx(data, output_path)
-    return send_file(
-        output_path,
-        as_attachment=True,
-        download_name=f"{work_id}_results.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-
-@app.route("/api/templates")
-def list_templates_api():
-    templates = []
-    for fname in sorted(os.listdir(app.config["TEMPLATES_DIR"])):
-        if not fname.endswith(".json"):
-            continue
-        tid = fname.replace(".json", "")
-        name = tid  # fallback
+                write_json(path, {'number': number, 'status': 'processing'})
+                try:
+                    pix = doc[number-1].get_pixmap(dpi=200, colorspace=fitz.csRGB, alpha=False)
+                    image = cv2.cvtColor(np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3), cv2.COLOR_RGB2BGR)
+                    write_image(page_dir / 'scan.png', image)
+                    result = recognize_page(image, page_dir)
+                    result['number'] = number
+                    write_json(path, result)
+                except Exception:
+                    logger.exception('Page %s failed', number)
+                    write_json(path, {'number': number, 'status': 'error', 'name': '', 'variant': '1',
+                                      'answers': {t: '' for t in TASKS}, 'raw': {}, 'reviewed': False,
+                                      'corrections': [], 'notes': {},
+                                      'error': 'Распознавание не завершено. Сверьте все ответы по скану вручную.'})
+        with LOCK:
+            meta = read_json(folder / 'work.json')
+            meta.update(finished=True, queue_state='done')
+            meta.pop('processing_error', None)
+            write_json(folder / 'work.json', meta)
+    except Exception:
+        logger.exception('Work processing failed')
         try:
-            with open(os.path.join(app.config["TEMPLATES_DIR"], fname), encoding="utf-8") as fh:
-                data = json.load(fh)
-                name = data.get("template_name", tid)
+            with LOCK:
+                meta = read_json(folder / 'work.json')
+                meta.update(queue_state='failed', processing_error=True)
+                write_json(folder / 'work.json', meta)
+        except (OSError, ValueError):
+            logger.error('Could not persist failure state')
+    finally:
+        with LOCK:
+            ACTIVE.discard(folder.name)
+
+
+def enqueue(folder):
+    with LOCK:
+        meta = read_json(folder / 'work.json')
+        if meta.get('deleted_at') or not profile_for(meta)['supported']:
+            return
+        if folder.name in ACTIVE:
+            return
+        meta.update(queue_state='queued', finished=False)
+        meta.pop('processing_error', None)
+        write_json(folder / 'work.json', meta)
+        ACTIVE.add(folder.name)
+        try:
+            EXECUTOR.submit(run_work, folder)
+        except RuntimeError:
+            ACTIVE.discard(folder.name)
+            raise
+
+
+def recover_queue(data_root):
+    """Rebuild the one-worker queue from durable work metadata after restart."""
+    pending = []
+    for path in Path(data_root).glob('*/work.json'):
+        if not re.fullmatch(r'[a-f0-9]{32}', path.parent.name):
+            continue
+        try:
+            meta = read_json(path)
+            if (not meta.get('finished') and not meta.get('deleted_at')
+                    and meta.get('queue_state') != 'failed' and profile_for(meta)['supported']):
+                pending.append((meta.get('created', ''), path.parent))
+        except (OSError, ValueError):
+            logger.warning('Cannot recover invalid work metadata')
+    for _, folder in sorted(pending):
+        enqueue(folder)
+    return len(pending)
+
+
+def create_app(data_dir=None):
+    app = Flask(__name__, template_folder='ui/templates', static_folder='ui/static')
+    data_root = Path(data_dir or ROOT / 'data/math9')
+    data_root.mkdir(parents=True, exist_ok=True)
+    accounts = Accounts(data_root / '_access')
+    app.extensions['accounts'] = accounts
+    app.extensions['trash_cleaner'] = TrashCleaner(data_root, LOCK, ACTIVE)
+    app.config.update(DATA_ROOT=data_root, MAX_CONTENT_LENGTH=80*1024*1024,
+                      SECRET_KEY=os.environ.get('MATH9_SECRET') or accounts.secret,
+                      SESSION_COOKIE_SAMESITE='Strict', SESSION_COOKIE_HTTPONLY=True,
+                      SESSION_COOKIE_SECURE=os.environ.get('MATH9_HTTPS') == '1',
+                      PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+                      PUBLIC_BASE_URL=os.environ.get('MATH9_PUBLIC_URL', 'http://127.0.0.1:5001'),
+                      MAX_FORM_MEMORY_SIZE=256*1024, MAX_FORM_PARTS=100)
+
+    def folder_for(work_id, include_deleted=False):
+        if not re.fullmatch(r'[a-f0-9]{32}', work_id):
+            abort(404)
+        folder = data_root / work_id
+        if not (folder / 'work.json').is_file():
+            abort(404)
+        meta = read_json(folder / 'work.json')
+        if not can_access(g.user, meta):
+            abort(404)
+        if not include_deleted and meta.get('deleted_at'):
+            abort(404)
+        return folder
+
+    def details(folder):
+        meta = read_json(folder / 'work.json')
+        meta['profile'] = profile_for(meta)
+        pages = []
+        keys = read_json(folder / 'keys.json') if (folder / 'keys.json').exists() else {}
+        for number in range(1, meta['count']+1):
+            path = folder / str(number) / 'page.json'
+            page = read_json(path) if path.exists() else {'number': number, 'status': 'waiting'}
+            page['score'] = grade(page, keys)
+            pages.append(page)
+        meta['done'] = sum(p['status'] in ('ready', 'error') for p in pages)
+        meta['reviewed'] = sum(bool(p.get('reviewed')) for p in pages)
+        meta['active'] = folder.name in ACTIVE
+        return meta, pages, keys
+
+    @app.before_request
+    def csrf_protection():
+        # Host rejection happens before routing; URL-based templates cannot run yet.
+        if isinstance(request.routing_exception, SecurityError):
+            return 'Invalid Host', 400
+        session.setdefault('csrf', secrets.token_hex(24))
+        if request.method == 'POST' and not secrets.compare_digest(session['csrf'].encode(), request.form.get('csrf', '').encode()):
+            abort(400, 'Обновите страницу и повторите действие.')
+
+    @app.context_processor
+    def common():
+        return {'tasks': TASKS, 'csrf': session.get('csrf', ''), 'exams': EXAMS, 'subjects': SUBJECTS}
+
+    @app.errorhandler(413)
+    def too_large(error):
+        return render_template('error.html', message='PDF слишком большой. Максимум 80 МБ.'), 413
+
+    @app.get('/')
+    def index():
+        works = []
+        trash_count = 0
+        for path in data_root.glob('*/work.json'):
+            try:
+                meta = read_json(path)
+                if not can_access(g.user, meta):
+                    continue
+                if meta.get('deleted_at'):
+                    trash_count += 1
+                    continue
+                works.append(details(path.parent)[0])
+            except (ValueError, OSError):
+                logger.exception('Invalid work metadata')
+        works.sort(key=lambda w: w['created'], reverse=True)
+        schools = accounts.lists()['schools'] if g.user['role'] == 'admin' else []
+        school_filter = request.args.get('school', '')
+        if school_filter and g.user['role'] == 'admin':
+            works = [w for w in works if w.get('school_id') == school_filter]
+        school_names = {s['id']: s['name'] for s in schools}
+        for work in works:
+            work['school_name'] = school_names.get(work.get('school_id'), 'Личная работа администратора')
+        return render_template('index.html', works=works, trash_count=trash_count, schools=schools, school_filter=school_filter)
+
+    @app.get('/trash')
+    def trash():
+        if g.user['role'] != 'admin':
+            abort(403)
+        works = []
+        for path in data_root.glob('*/work.json'):
+            try:
+                meta = read_json(path)
+                if not can_access(g.user, meta):
+                    continue
+                if meta.get('deleted_at'):
+                    deadline = expires_at(meta)
+                    meta['purge_date'] = deadline.astimezone().strftime('%d.%m.%Y %H:%M') if deadline else None
+                    meta['expired'] = bool(deadline and deadline <= datetime.now(timezone.utc))
+                    works.append(meta)
+            except (ValueError, OSError):
+                logger.exception('Invalid work metadata')
+        works.sort(key=lambda w: w['deleted_at'], reverse=True)
+        return render_template('trash.html', works=works)
+
+    @app.route('/work/<work_id>/delete', methods=['GET', 'POST'])
+    def delete_work(work_id):
+        with LOCK:
+            folder = folder_for(work_id)
+            meta = read_json(folder / 'work.json')
+            if work_id in ACTIVE:
+                return render_template('error.html', message='Дождитесь завершения распознавания, затем удалите работу.'), 409
+            if request.method == 'GET':
+                return render_template('delete_work.html', work=meta)
+            if request.form.get('confirm') != 'yes':
+                flash('Подтвердите перемещение работы в корзину.')
+                return redirect(url_for('delete_work', work_id=work_id))
+            # Soft deletion preserves the PDF, crops and teacher corrections.
+            meta['deleted_at'] = datetime.now(timezone.utc).isoformat(timespec='seconds')
+            write_json(folder / 'work.json', meta)
+        flash('Работа в корзине. Координатор может восстановить её в течение 3 дней, затем файлы удалятся автоматически.')
+        return redirect(url_for('index'))
+
+    @app.post('/work/<work_id>/restore')
+    def restore_work(work_id):
+        if g.user['role'] != 'admin':
+            abort(403)
+        with LOCK:
+            folder = folder_for(work_id, include_deleted=True)
+            meta = read_json(folder / 'work.json')
+            if not meta.get('deleted_at'):
+                abort(404)
+            deadline = expires_at(meta)
+            if deadline and deadline <= datetime.now(timezone.utc):
+                abort(409, 'Срок хранения истёк. Работа ожидает окончательного удаления.')
+            meta.pop('deleted_at')
+            write_json(folder / 'work.json', meta)
+        flash('Работа восстановлена вместе с ответами и отметками проверки.')
+        return redirect(url_for('index'))
+
+    @app.post('/upload')
+    def upload():
+        exam = request.form.get('exam', 'oge')
+        subject = request.form.get('subject', 'math')
+        if exam not in EXAMS or subject not in SUBJECTS:
+            abort(400, 'Выберите ОГЭ или ЕГЭ и предмет из списка.')
+        if g.user['role'] != 'admin' and (exam != 'oge' or subject != 'math'):
+            abort(403)
+        supported = profile_for({'exam': exam, 'subject': subject})['supported']
+        if shutil.disk_usage(data_root).free < 5 * 1024**3:
+            abort(503, 'Недостаточно свободного места. Обратитесь к координатору.')
+        upload = request.files.get('pdf')
+        if not upload or not upload.filename or not upload.filename.lower().endswith('.pdf'):
+            flash('Выберите PDF со сканами бланков.')
+            return redirect(url_for('index'))
+        content = upload.read()
+        try:
+            with fitz.open(stream=content, filetype='pdf') as doc:
+                if doc.needs_pass or not 1 <= len(doc) <= 100:
+                    raise ValueError('Expected 1 to 100 unencrypted pages')
+                count = len(doc)
+                for p in doc:
+                    if p.rect.width > 1000 or p.rect.height > 1300 or p.rect.width < 100 or p.rect.height < 100:
+                        raise ValueError('Unsupported page dimensions')
         except Exception:
-            pass
-        # Группа = часть имени до " — " (или "Другие шаблоны" если разделителя нет)
-        group = name.split(" — ")[0] if " — " in name else "Другие шаблоны"
-        templates.append({"id": tid, "name": name, "group": group})
-    # Сортировка: варианты 2026 первыми (по группе), затем остальные; внутри — по имени
-    templates.sort(key=lambda t: (0 if "2026" in t["id"] else 1, t["group"], t["name"]))
-    return jsonify(templates)
+            flash('Не удалось прочитать PDF. Нужны 1–100 страниц обычного формата без пароля.')
+            return redirect(url_for('index'))
+        work_id = uuid.uuid4().hex
+        folder = data_root / work_id
+        folder.mkdir()
+        (folder / 'source.pdf').write_bytes(content)
+        # Publishing work.json last makes a completed upload recoverable.
+        write_json(folder / 'keys.json', {})
+        write_json(folder / 'work.json', {'id': work_id, 'title': request.form.get('title', '').strip()[:100] or Path(upload.filename).stem,
+                    'class_name': request.form.get('class_name', '').strip()[:30], 'count': count,
+                    'created': datetime.now().isoformat(timespec='seconds'), 'finished': False,
+                    'exam': exam, 'subject': subject,
+                    'queue_state': 'queued' if supported else 'awaiting_template',
+                    'template': form_config()['id'] if supported else None,
+                    'owner_id': g.user['id'], 'school_id': g.user['school_id']})
+        if supported:
+            enqueue(folder)
+        else:
+            flash('PDF сохранён. Шаблон для этого экзамена и предмета ещё не настроен; распознавание не запускалось.')
+        return redirect(url_for('work', work_id=work_id))
+
+    @app.get('/work/<work_id>')
+    def work(work_id):
+        meta, pages, keys = details(folder_for(work_id))
+        return render_template('work.html', work=meta, pages=pages, keys=keys)
+
+    @app.post('/work/<work_id>/resume')
+    def resume(work_id):
+        with LOCK:
+            folder = folder_for(work_id)
+            if not profile_for(read_json(folder / 'work.json'))['supported']:
+                abort(409, 'Сначала необходимо настроить шаблон этого экзамена и предмета.')
+            enqueue(folder)
+        return redirect(url_for('work', work_id=work_id))
+
+    @app.route('/work/<work_id>/key', methods=['GET', 'POST'])
+    def key(work_id):
+        folder = folder_for(work_id)
+        meta, _, keys = details(folder)
+        if not meta['profile']['supported']:
+            abort(409, 'Ключи станут доступны после настройки шаблона.')
+        variant = request.values.get('variant', '1').strip()[:30] or '1'
+        if request.method == 'POST':
+            answers = {t: request.form.get('key_'+t, '').strip()[:100] for t in TASKS}
+            with LOCK:
+                folder_for(work_id)
+                keys = read_json(folder / 'keys.json')
+                keys[variant] = {t: a for t,a in answers.items() if a}
+                write_json(folder / 'keys.json', keys)
+            flash('Ключ сохранён. Баллы рассчитаны для проверенных бланков этого варианта.')
+            return redirect(url_for('work', work_id=work_id))
+        return render_template('key.html', work=meta, variant=variant, key=keys.get(variant, {}), variants=keys)
+
+    @app.route('/work/<work_id>/page/<int:number>', methods=['GET', 'POST'])
+    def review(work_id, number):
+        folder = folder_for(work_id)
+        meta, pages, keys = details(folder)
+        if not 1 <= number <= meta['count']:
+            abort(404)
+        page = pages[number-1]
+        if page['status'] not in ('ready', 'error'):
+            return redirect(url_for('work', work_id=work_id))
+        if request.method == 'POST':
+            if request.form.get('action') == 'verify' and not request.form.get('checked_corrections'):
+                flash('Подтвердите, что сверили блок замен ответов внизу бланка.')
+                return redirect(url_for('review', work_id=work_id, number=number))
+            path = folder / str(number) / 'page.json'
+            with LOCK:
+                folder_for(work_id)
+                page = read_json(path)
+                page['answers'] = {t: request.form.get('answer_'+t, '').strip()[:40] for t in TASKS}
+                page['name'] = request.form.get('name', '').strip()[:160]
+                page['variant'] = request.form.get('variant', '1').strip()[:30] or '1'
+                page['reviewed'] = request.form.get('action') == 'verify'
+                page['updated'] = datetime.now().isoformat(timespec='seconds')
+                write_json(path, page)
+            flash('Бланк проверен.' if page['reviewed'] else 'Изменения сохранены как черновик.')
+            if page['reviewed'] and number < meta['count'] and pages[number]['status'] in ('ready','error'):
+                return redirect(url_for('review', work_id=work_id, number=number+1))
+            return redirect(url_for('work', work_id=work_id))
+        page_dir = folder / str(number)
+        return render_template('review.html', work=meta, page=page, keys=keys,
+                               has_crops=(page_dir / 'answer_1.png').exists(),
+                               has_scan=(page_dir / 'scan.png').exists(),
+                               has_corrections=(page_dir / 'corrections.png').exists())
+
+    @app.get('/work/<work_id>/image/<int:number>/<name>')
+    def image(work_id, number, name):
+        folder = folder_for(work_id)
+        if not re.fullmatch(r'(scan|corrections|answer_([1-9]|1[0-9]))\.png', name):
+            abort(404)
+        path = folder / str(number) / name
+        if not path.is_file():
+            abort(404)
+        return send_file(path, max_age=0)
+
+    @app.get('/work/<work_id>/export')
+    def export(work_id):
+        meta, pages, _ = details(folder_for(work_id))
+        if not meta['profile']['supported']:
+            abort(409, 'Результатов пока нет: ожидается настройка шаблона.')
+        stream = io.StringIO(newline='')
+        writer = csv.writer(stream, delimiter=';')
+        writer.writerow(['Страница','ФИО','Класс','Вариант','Статус','Верных ответов','Заданий в ключе', *TASKS])
+        def safe(value):
+            text = str(value)
+            return "'"+text if text.startswith(('=','+','-','@','\t','\r','\n')) else text
+        for p in pages:
+            score = p['score'] or {}
+            writer.writerow([p['number'],safe(p.get('name','')),safe(meta['class_name']),safe(p.get('variant','')),
+                             'Проверен' if p.get('reviewed') else 'Не проверен', score.get('correct',''),score.get('total',''),
+                             *[safe(p.get('answers',{}).get(t,'')) for t in TASKS]])
+        return send_file(io.BytesIO(stream.getvalue().encode('utf-8-sig')), mimetype='text/csv; charset=utf-8',
+                         as_attachment=True, download_name='blanks_results.csv')
+
+    @app.after_request
+    def privacy_headers(response):
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+        return response
+
+    def school_summaries():
+        works = []
+        for path in data_root.glob('*/work.json'):
+            try:
+                if not read_json(path).get('deleted_at'):
+                    works.append(details(path.parent)[0])
+            except (ValueError, OSError):
+                logger.exception('Invalid work metadata')
+        return works
+
+    install_accounts(app, accounts, school_summaries)
+    return app
 
 
-@app.route("/editor")
-def template_editor():
-    return render_template("editor.html")
+app = create_app()
 
-
-@app.route("/debug_crops/<path:filename>")
-def custom_static(filename):
-    return send_from_directory(app.config["DEBUG_CROPS"], filename)
-
-
-@app.after_request
-def add_no_cache_headers(response):
-    if response.content_type and "text/html" in response.content_type:
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-    return response
-
-
-# --- In-memory rate limiter ---
-
-def _rate_limit_exceeded(ip: str) -> bool:
-    now = datetime.now().timestamp()
-    window = RATE_LIMIT_WINDOW_SECONDS
-    limit = RATE_LIMIT_PER_MINUTE
-
-    log = _request_log.setdefault(ip, [])
-    # Сдвигаем окно — удаляем записи старше window секунд
-    cutoff = now - window
-    _request_log[ip] = [t for t in log if t > cutoff]
-
-    if len(_request_log[ip]) >= limit:
-        return True
-
-    _request_log[ip].append(now)
-    return False
-
-
-def _check_rate_limit():
-    ip = request.remote_addr or "unknown"
-    if _rate_limit_exceeded(ip):
-        logger.warning("Rate limit exceeded for IP %s", ip)
-        return jsonify({"error": "Too many requests. Try again later."}), 429
-    return None
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", DEFAULT_PORT))
-    debug_mode = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(host="0.0.0.0", port=port, debug=debug_mode, use_reloader=False)
+if __name__ == '__main__':
+    from core.server_runtime import instance_lock
+    with instance_lock(app.config['DATA_ROOT']):
+        cleaner = app.extensions['trash_cleaner']
+        cleaner.start()
+        recover_queue(app.config['DATA_ROOT'])
+        try:
+            app.run(host='127.0.0.1', port=int(os.environ.get('PORT', '5001')), debug=False, use_reloader=False)
+        finally:
+            cleaner.stop()

@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% block title %}{{ 'Первичная настройка' if setup else 'Принять приглашение' }} · Бланки{% endblock %}{% block content %}
+<section class="paper auth-card"><p class="eyebrow">{{ 'ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА ПК' if setup else 'ПЕРСОНАЛЬНОЕ ПРИГЛАШЕНИЕ' }}</p><h1>{{ 'Создать администратора' if setup else 'Создать кабинет' }}</h1>
+<p class="muted">{% if setup %}Ваши прежние работы сохранятся и будут видны только администратору.{% else %}Школа уже указана в приглашении. После регистрации вы сможете загружать и проверять свои работы.{% endif %}</p>
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label>{{ 'Код первичной настройки' if setup else 'Код приглашения' }}<input type="password" name="code" data-access-code required maxlength="100" autocomplete="off" value="{{ request.form.get('code','') }}"></label>
+<label>Ваше имя<input name="name" required minlength="2" maxlength="100" autocomplete="name" value="{{ request.form.get('name','') }}"></label>
+<label>Логин<input name="username" required minlength="3" maxlength="80" autocomplete="username" autocapitalize="none" value="{{ request.form.get('username','') }}"><small>Латинские буквы и цифры; можно использовать адрес почты.</small></label>
+<label>Пароль<input type="password" name="password" required minlength="12" maxlength="128" autocomplete="new-password"><small>От 12 символов. Не используйте пароль роутера или общий пароль школы.</small></label>
+<label>Повторите пароль<input type="password" name="password_again" required minlength="12" maxlength="128" autocomplete="new-password"></label>
+<button class="button primary" type="submit">Создать кабинет</button></form><a class="back" href="{{ url_for('login') }}">Уже есть кабинет? Войти</a></section>
+{% endblock %}
