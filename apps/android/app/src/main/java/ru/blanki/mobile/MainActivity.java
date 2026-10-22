@@ -23,19 +23,23 @@ public class MainActivity extends Activity {
     static final int GREEN=0xFF23634F,INK=0xFF183D32,CREAM=0xFFF4F3EB,RED=0xFFE00020;
     static final int CAMERA=10,IMPORT=11,MASK=12,SAVE_EXPORT=13;
     final ExecutorService worker=Executors.newSingleThreadExecutor();Store store;JSONObject work;LinearLayout body,root;TextView status;
-    Ocr ocr;String screen="home";int pageIndex=-1;boolean dirty=false,busy=false;volatile boolean cancelled=false;Runnable draftSave;File cameraFile,exportFile;String exportMime;
+    Ocr ocr;NameVoiceInput voiceInput;String screen="home";int pageIndex=-1;boolean dirty=false,busy=false;volatile boolean cancelled=false;Runnable draftSave;File cameraFile,exportFile;String exportMime;
     interface Job {void run()throws Exception;}
     int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
     @Override public void onCreate(Bundle saved){
-        super.onCreate(saved);if(!OpenCVLoader.initLocal()){new AlertDialog.Builder(this).setMessage("Не удалось загрузить обработчик изображений").setPositiveButton("Закрыть",(d,w)->finish()).show();return;}store=new Store(this);
+        super.onCreate(saved);if(!OpenCVLoader.initLocal()){new AlertDialog.Builder(this).setMessage("Не удалось загрузить обработчик изображений").setPositiveButton("Закрыть",(d,w)->finish()).show();return;}store=new Store(this);voiceInput=new NameVoiceInput(this);
         try{if(saved!=null){String id=saved.getString("work");if(id!=null)work=store.load(id);String path=saved.getString("camera");if(path!=null)cameraFile=new File(path);}if(work!=null)showWork();else home();
             if(BuildConfig.DEBUG&&"blank".equals(getIntent().getStringExtra("qa")))qaBlank();
         }catch(Exception e){error(e);}
     }
     @Override protected void onSaveInstanceState(Bundle b){super.onSaveInstanceState(b);if(work!=null)b.putString("work",work.optString("id"));if(cameraFile!=null)b.putString("camera",cameraFile.toString());}
+    @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);if(voiceInput!=null)voiceInput.permissionResult(code,grants);}
+    @Override protected void onStop(){if(voiceInput!=null)voiceInput.cancel();super.onStop();}
+    @Override protected void onDestroy(){if(voiceInput!=null)voiceInput.cancel();super.onDestroy();}
     @Override public void onBackPressed(){if(busy)return;if(dirty){new AlertDialog.Builder(this).setMessage("Есть несохранённые правки").setPositiveButton("Сохранить черновик",(d,w)->{if(draftSave!=null)draftSave.run();if(!dirty)back();}).setNegativeButton("Остаться",null).show();return;}back();}
     void back(){try{if(screen.equals("home")){super.onBackPressed();}else if(screen.equals("work"))home();else showWork();}catch(Exception e){error(e);}}
     void shell(String title,String subtitle){
+        if(voiceInput!=null)voiceInput.cancel();
         dirty=false;draftSave=null;root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(CREAM);
         root.setOnApplyWindowInsetsListener((v,insets)->{root.setPadding(dp(16),insets.getSystemWindowInsetTop()+dp(8),dp(16),insets.getSystemWindowInsetBottom()+dp(8));return insets;});
         TextView brand=text("БЛАНКИ  /  НА ТЕЛЕФОНЕ",12,GREEN);brand.setLetterSpacing(.12f);root.addView(brand);
@@ -63,10 +67,19 @@ public class MainActivity extends Activity {
         note("Бланков ответов: "+count+" · сверено: "+reviewed+"\nВсего листов: "+pages.length()+". Регистрацию и листы №2 не считаем отдельными учениками.");
         if(Profile.ege(work.getString("profile")))note("Для каждого комплекта: регистрация → ответы №1 → листы №2. Тип листа выбирается вручную в этой версии. Не объединяйте разных учеников без проверки порядка.");
         for(int i=0;i<pages.length();i++){final int index=i;JSONObject p=pages.getJSONObject(i);String title="Лист "+(i+1)+" · "+kindLabel(p.optString("kind"))+"\n"+p.optString("name","");if(Exports.answer(p))title+="\n"+Exports.score(work,p);else title+="\n"+(p.optBoolean("reviewed")?"Сверено":"Нужно просмотреть");body.addView(button(title,()->openPage(index)));}
-        if(pages.length()>0){action("Результаты и экспорт",this::results);action("Порядок листов",this::reorder);}
+        if(pages.length()>0){action("Результаты и экспорт",this::results);action("Порядок листов",this::reorder);action("Выбрать и удалить листы",()->{try{new PageActions(this,work,this::deletePages).choose();}catch(Exception e){error(e);}});}
+        if(work.optJSONArray(PageEdits.PENDING)!=null)note("Некоторые файлы удалённых листов пока заняты. Приложение повторит очистку при следующем открытии работы.");
         action("Все работы",()->{try{home();}catch(Exception e){error(e);}});
     }
     static String kindLabel(String k){return switch(k){case "registration"->"Регистрация";case "manual"->"Ответы №2 / дополнительный";case "oge","answers"->"Ответы №1";default->"Выберите тип листа";};}
+    void deletePages(Set<String> ids){
+        JSONObject current=work;
+        runBusy("Удаление выбранных листов",()->{
+            JSONObject updated=store.deletePages(current,ids);
+            for(String extension:new String[]{"pdf","csv"})new File(getCacheDir(),"exports/blanki-"+current.getString("id").substring(0,8)+"."+extension).delete();
+            runOnUiThread(()->{try{work=updated;pageIndex=-1;exportFile=null;showWork();Toast.makeText(this,"Удалено листов: "+ids.size(),Toast.LENGTH_LONG).show();}catch(Exception e){error(e);}});
+        },false);
+    }
     void pick(int code,String[] types,boolean multiple){Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("*/*");i.putExtra(Intent.EXTRA_MIME_TYPES,types);i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,multiple);i.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,code);}
     void camera(){try{File d=new File(getCacheDir(),"camera");d.mkdirs();cameraFile=new File(d,Store.id()+".jpg");Uri uri=FileProvider.getUriForFile(this,getPackageName()+".files",cameraFile);Intent i=new Intent(MediaStore.ACTION_IMAGE_CAPTURE);i.putExtra(MediaStore.EXTRA_OUTPUT,uri);i.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_READ_URI_PERMISSION);i.setClipData(ClipData.newRawUri("scan",uri));startActivityForResult(i,CAMERA);}catch(Exception e){error(e);}}
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK)return;
@@ -86,7 +99,8 @@ public class MainActivity extends Activity {
     }
     void addImage(InputStream in)throws Exception{File temp=new File(getCacheDir(),Store.id()+".image");Store.copy(in,temp,40L*1024*1024);Bitmap b=ImageTools.load(temp,3508);try{addBitmap(b);}finally{b.recycle();temp.delete();}}
     void addBitmap(Bitmap b)throws Exception{if(work.getJSONArray("pages").length()>=100)throw new IOException("Не более 100 листов в одной работе");JSONObject p=store.add(work);ImageTools.save(b,new File(store.pageDir(work,p),"original.jpg"));ImageTools.save(b,new File(store.pageDir(work,p),"scan.jpg"));work.getJSONArray("pages").put(p);store.save(work);}
-    void runBusy(String title,Job job){if(busy)return;busy=true;cancelled=false;ProgressDialog dialog=new ProgressDialog(this);dialog.setTitle(title);dialog.setMessage("Выполняется на телефоне…");dialog.setCancelable(false);dialog.setButton(DialogInterface.BUTTON_NEGATIVE,"Остановить",(d,w)->cancelled=true);dialog.show();status=new TextView(this);activeProgress=dialog;
+    void runBusy(String title,Job job){runBusy(title,job,true);}
+    void runBusy(String title,Job job,boolean canCancel){if(busy)return;busy=true;cancelled=false;ProgressDialog dialog=new ProgressDialog(this);dialog.setTitle(title);dialog.setMessage("Выполняется на телефоне…");dialog.setCancelable(false);if(canCancel)dialog.setButton(DialogInterface.BUTTON_NEGATIVE,"Остановить",(d,w)->cancelled=true);dialog.show();status=new TextView(this);activeProgress=dialog;
         worker.submit(()->{try{job.run();}catch(Exception e){runOnUiThread(()->error(e));}finally{runOnUiThread(()->{busy=false;activeProgress=null;dialog.dismiss();});}});
     }
     ProgressDialog activeProgress;
@@ -94,6 +108,7 @@ public class MainActivity extends Activity {
     void openPage(int index){try{
         pageIndex=index;JSONObject p=work.getJSONArray("pages").getJSONObject(index);screen="page";shell("Лист "+(index+1),kindLabel(p.optString("kind")));File folder=store.pageDir(work,p);
         image(new File(folder,"scan.jpg"),250);action("Границы, поворот и изображение",()->editScan(index));action("Тип листа: "+kindLabel(p.optString("kind")),()->chooseKind(index));
+        Button delete=button("Удалить этот лист",()->new PageActions(this,work,this::deletePages).single(p.optString("id")));delete.setTextColor(RED);body.addView(delete);
         if(p.optString("kind").equals("unknown")){note("Сначала укажите, что на листе. Он пока не считается отдельным учеником.");action("К списку листов",()->{try{showWork();}catch(Exception e){error(e);}});return;}
         if(!p.optString("kind").equals("manual"))action(p.optBoolean("recognized")?"Перераспознать этот лист":"Распознать на телефоне",()->{if(p.optBoolean("recognized")||p.optBoolean("reviewed"))new AlertDialog.Builder(this).setMessage("Повторное распознавание заменит поля этого листа. Продолжить?").setPositiveButton("Перераспознать",(d,w)->recognize(index)).setNegativeButton("Отмена",null).show();else recognize(index);});
         if(p.optBoolean("recognized")||p.optString("kind").equals("manual"))action("Сверить и исправить",()->review(index));
@@ -106,7 +121,7 @@ public class MainActivity extends Activity {
         JSONObject p=work.getJSONArray("pages").getJSONObject(index);p.put("reviewed",false).put("recognized",false);store.save(work);File folder=store.pageDir(work,p),stage=new File(folder,"ocr-"+Store.id());stage.mkdirs();if(ocr==null)ocr=new Ocr(this);JSONObject result=ocr.process(new File(folder,"scan.jpg"),work.getString("profile"),p.getString("kind"),stage,this::progress);if(cancelled)throw new CancellationException("Распознавание остановлено");
         File[] generated=stage.listFiles();if(generated!=null)for(File f:generated){try(InputStream in=new FileInputStream(f)){Store.copy(in,new File(folder,f.getName()),20L*1024*1024);}}
         Iterator<String> fields=result.keys();while(fields.hasNext()){String key=fields.next();p.put(key,result.get(key));}
-        if(p.getString("kind").equals("answers")){JSONArray pages=work.getJSONArray("pages");for(int j=index-1;j>=0;j--){JSONObject reg=pages.getJSONObject(j);if(reg.optString("kind").equals("registration")){for(String key:new String[]{"name","variant","school"})p.put(key,reg.optString(key));break;}if(Exports.answer(reg))break;}}
+        if(p.getString("kind").equals("answers")&&!p.optBoolean("registration_link_invalid")){JSONArray pages=work.getJSONArray("pages");for(int j=index-1;j>=0;j--){JSONObject reg=pages.getJSONObject(j);if(reg.optString("kind").equals("registration")){for(String key:new String[]{"name","variant","school"})p.put(key,reg.optString(key));break;}if(Exports.answer(reg))break;}}
         store.save(work);if(generated!=null)for(File f:generated)if(f.isFile())f.delete();stage.delete();runOnUiThread(()->review(index));
     });}
     void editScan(int index){try{
@@ -122,10 +137,19 @@ public class MainActivity extends Activity {
     }
     void review(int index){try{
         JSONObject p=work.getJSONArray("pages").getJSONObject(index);String profile=work.getString("profile"),kind=p.getString("kind");File folder=store.pageDir(work,p);screen="review";shell("Сверка · лист "+(index+1),"Скан → прочитано → правка. Ничего не отправляется в интернет.");
-        if(kind.equals("manual")){image(new File(folder,"scan.jpg"),450);note("Ответы №2 не распознаются и не оцениваются автоматически. Проверьте порядок и принадлежность листа по исходной работе.");action("Лист просмотрен",()->{try{p.put("reviewed",true);store.save(work);showWork();}catch(Exception e){error(e);}});return;}
+        if(kind.equals("manual")){image(new File(folder,"scan.jpg"),450);note("Ответы №2 не распознаются и не оцениваются автоматически. Проверьте порядок и принадлежность листа по исходной работе.");if(p.optBoolean("attachment_review_required"))note("После удаления или перестановки листов изменилось окружение этого листа. Убедитесь, что он относится к нужному ученику.");action("Лист просмотрен",()->{try{p.put("reviewed",true).put("attachment_review_required",false);store.save(work);showWork();}catch(Exception e){error(e);}});return;}
         if(!p.optBoolean("recognized")){note("Этот скан ещё не распознан. Поля можно заполнить вручную по полному изображению.");image(new File(folder,"scan.jpg"),240);}
         if(p.optBoolean("recognized"))for(int i=0;i<3;i++)image(new File(folder,"name_"+i+".png"),45);
-        EditText name=input(body,"ФИО ученика",p.optString("name"),false);if(p.optBoolean("recognized"))image(new File(folder,"region.png"),54);EditText variant=input(body,"Код региона = вариант",p.optString("variant"),false);if(p.optBoolean("recognized"))image(new File(folder,"school.png"),54);EditText school=input(body,"Код школы (если есть)",p.optString("school"),false);
+        LinearLayout nameRow=new LinearLayout(this);nameRow.setOrientation(LinearLayout.HORIZONTAL);body.addView(nameRow);
+        EditText name=input(nameRow,"ФИО ученика",p.optString("name"),false);name.setLayoutParams(new LinearLayout.LayoutParams(0,dp(54),1));
+        ImageButton microphone=new ImageButton(this);microphone.setImageResource(R.drawable.ic_microphone);microphone.setBackground(bg(0xFFE6EDDF));microphone.setContentDescription("Ввести ФИО голосом без интернета");microphone.setTooltipText("ФИО голосом");nameRow.addView(microphone,new LinearLayout.LayoutParams(dp(54),dp(54)));
+        if(p.optBoolean("recognized"))image(new File(folder,"region.png"),54);EditText variant=input(body,"Код региона = вариант",p.optString("variant"),false);if(p.optBoolean("recognized"))image(new File(folder,"school.png"),54);EditText school=input(body,"Код школы (если есть)",p.optString("school"),false);
+        CheckBox binding=new CheckBox(this);
+        if(p.optBoolean("registration_link_invalid")&&kind.equals("answers")){
+            JSONObject reg=PageEdits.registrationFor(work.getJSONArray("pages"),p.getString("id"));
+            note("Состав комплекта изменился. Проверьте, к какому ученику относится лист. Предыдущая регистрация: "+(reg==null?"отсутствует":reg.optString("name","ФИО не заполнено"))+". Ответы и прежние поля сохранены, автоматическая перепривязка отключена.");
+            binding.setText("Подтверждаю связь с предыдущей регистрацией и ФИО со скана");body.addView(binding);
+        }
         Map<Integer,EditText> fields=new LinkedHashMap<>();Map<Integer,TextView> badges=new HashMap<>();Map<Integer,TextView> expectedLabels=new HashMap<>();
         if(!kind.equals("registration"))for(int t=Profile.start(profile);t<=Profile.end(profile);t++){
             body.addView(text("Задание "+t,17,INK));if(p.optBoolean("recognized"))image(new File(folder,"answer_"+t+".png"),57);if(p.optJSONObject("confidence")!=null&&p.getJSONObject("confidence").optDouble(""+t,1)<.65)body.addView(text("Неуверенное чтение: проверьте особенно внимательно",12,RED));EditText answer=input(body,"Ответ",p.getJSONObject("answers").optString(""+t),false);fields.put(t,answer);TextView badge=text("",19,INK),expected=text("",14,INK);body.addView(badge);body.addView(expected);badges.put(t,badge);expectedLabels.put(t,expected);
@@ -135,13 +159,20 @@ public class MainActivity extends Activity {
         for(EditText e:fields.values())e.addTextChangedListener(watcher);name.addTextChangedListener(watcher);variant.addTextChangedListener(watcher);school.addTextChangedListener(watcher);compare.run();
         if(!kind.equals("registration")){body.addView(text("Замены и исправления ученика",18,INK));if(p.optBoolean("recognized"))image(new File(folder,"corrections.png"),130);note("Нижние замены в первой версии не применяются автоматически. Перенесите окончательные ответы в поля выше.");}
         CheckBox checked=new CheckBox(this);checked.setText(kind.equals("registration")?"ФИО, вариант и код школы сверены":"Все ответы и нижние замены сверены со сканом");checked.setChecked(p.optBoolean("reviewed"));body.addView(checked);
-        Runnable saveDraft=()->saveReview(index,p,name,variant,school,fields,false,checked);draftSave=saveDraft;action("Сохранить черновик",saveDraft);action("Сверено · сохранить",()->saveReview(index,p,name,variant,school,fields,true,checked));action("Полный скан",()->fullImage(new File(folder,"scan.jpg")));
+        microphone.setOnClickListener(v->{if(!busy)voiceInput.begin(name,()->{checked.setChecked(false);dirty=true;});});
+        Runnable saveDraft=()->saveReview(index,p,name,variant,school,fields,false,checked,binding);draftSave=saveDraft;action("Сохранить черновик",saveDraft);action("Сверено · сохранить",()->saveReview(index,p,name,variant,school,fields,true,checked,binding));action("Полный скан",()->fullImage(new File(folder,"scan.jpg")));
     }catch(Exception e){error(e);}}
-    void saveReview(int index,JSONObject p,EditText name,EditText variant,EditText school,Map<Integer,EditText> fields,boolean reviewed,CheckBox checked){try{
+    void saveReview(int index,JSONObject p,EditText name,EditText variant,EditText school,Map<Integer,EditText> fields,boolean reviewed,CheckBox checked,CheckBox binding){try{
         if(reviewed&&(!checked.isChecked()||name.getText().toString().trim().isEmpty()||Profile.variant(variant.getText().toString()).isEmpty()))throw new IOException("Укажите ФИО, вариант цифрами и подтвердите сверку");
+        if(reviewed&&p.optBoolean("registration_link_invalid")&&p.optString("kind").equals("answers")){
+            JSONObject reg=PageEdits.registrationFor(work.getJSONArray("pages"),p.getString("id"));
+            if(reg==null||!reg.optBoolean("reviewed"))throw new IOException("Перед этим листом нужна сверенная регистрация. Можно сохранить черновик, затем исправить порядок или добавить нужный лист.");
+            if(!binding.isChecked())throw new IOException("Подтвердите принадлежность листа предыдущей регистрации");
+            p.put("registration_link_invalid",false);
+        }
         p.put("name",name.getText().toString().trim()).put("variant",variant.getText().toString().trim()).put("school",school.getText().toString().trim()).put("reviewed",reviewed);
         JSONObject answers=p.getJSONObject("answers");for(int t:fields.keySet())answers.put(""+t,fields.get(t).getText().toString().trim());
-        if(p.optString("kind").equals("registration")){JSONArray pages=work.getJSONArray("pages");for(int j=index+1;j<pages.length();j++){JSONObject next=pages.getJSONObject(j);if(next.optString("kind").equals("registration"))break;if(next.optString("kind").equals("answers")){for(String k:new String[]{"name","variant","school"})if(!next.optString(k).equals(p.optString(k))){next.put(k,p.optString(k));next.put("reviewed",false);}break;}}}
+        if(p.optString("kind").equals("registration")){JSONArray pages=work.getJSONArray("pages");for(int j=index+1;j<pages.length();j++){JSONObject next=pages.getJSONObject(j);if(next.optString("kind").equals("registration"))break;if(next.optString("kind").equals("answers")){if(!next.optBoolean("registration_link_invalid"))for(String k:new String[]{"name","variant","school"})if(!next.optString(k).equals(p.optString(k))){next.put(k,p.optString(k));next.put("reviewed",false);}break;}}}
         store.save(work);dirty=false;if(reviewed)showWork();else Toast.makeText(this,"Черновик сохранён",Toast.LENGTH_SHORT).show();
     }catch(Exception e){error(e);}}
     void maskMenu(){new AlertDialog.Builder(this).setTitle("Ключ ответов").setItems(new String[]{"Загрузить XLSX или CSV","Ввести / изменить вручную"},(d,n)->{if(n==0)pick(MASK,new String[]{"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","text/csv","text/comma-separated-values","text/plain"},false);else manualMask();}).show();}

@@ -23,13 +23,17 @@ public final class Store {
         try{out=target.startWrite();out.write(work.toString().getBytes(StandardCharsets.UTF_8));target.finishWrite(out);}catch(Exception e){if(out!=null)target.failWrite(out);throw e;}
     }
     public JSONObject load(String id)throws Exception{
-        AtomicFile f=new AtomicFile(new File(dir(id),"work.json"));return new JSONObject(new String(f.readFully(),StandardCharsets.UTF_8));
+        AtomicFile f=new AtomicFile(new File(dir(id),"work.json"));JSONObject work=new JSONObject(new String(f.readFully(),StandardCharsets.UTF_8));
+        return PageDeletion.recover(dir(id),work,this::save);
     }
     public List<JSONObject> list()throws Exception{
         List<JSONObject> out=new ArrayList<>();File[] dirs=root.listFiles();if(dirs!=null)for(File d:dirs)if(d.isDirectory()&&d.getName().matches("[a-f0-9]{32}"))out.add(load(d.getName()));
         out.sort((a,b)->Long.compare(b.optLong("created"),a.optLong("created")));return out;
     }
-    public File pageDir(JSONObject work,JSONObject page)throws Exception{File d=new File(dir(work.getString("id")),page.getString("id"));d.mkdirs();return d;}
+    public File pageDir(JSONObject work,JSONObject page)throws Exception{PageEdits.requireId(page.getString("id"));File d=new File(dir(work.getString("id")),page.getString("id"));d.mkdirs();return d;}
+    public JSONObject deletePages(JSONObject work,Set<String> ids)throws Exception {
+        return PageDeletion.remove(dir(work.getString("id")),work,ids,this::save);
+    }
     public static void copy(InputStream in,File file,long limit)throws IOException{
         try(in;OutputStream out=new FileOutputStream(file)){byte[] b=new byte[65536];long n=0;int r;while((r=in.read(b))!=-1){n+=r;if(n>limit)throw new IOException("Файл слишком большой");out.write(b,0,r);}}
     }

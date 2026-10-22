@@ -23,6 +23,7 @@ public final class Exports {
             if(!Arrays.asList("oge","answers","registration","manual").contains(kind))throw new IOException("Сначала выберите тип листа "+(i+1));
             if(Profile.ege(w.getString("profile"))?kind.equals("oge"):kind.equals("answers")||kind.equals("registration"))throw new IOException("Тип листа "+(i+1)+" не соответствует экзамену");
             if(kind.equals("manual")&&!p.optBoolean("reviewed"))throw new IOException("Сначала просмотрите дополнительный лист "+(i+1));
+            if(kind.equals("answers")&&p.optBoolean("registration_link_invalid"))throw new IOException("Подтвердите принадлежность листа "+(i+1)+" после изменения комплекта");
         }
         for(int i=0;i<pages.length();i++){JSONObject p=pages.getJSONObject(i);if(answer(p)){count++;if(!p.optBoolean("reviewed"))throw new IOException("Сначала сверьте лист "+(i+1));if(Profile.ege(w.getString("profile"))){JSONObject reg=null;for(int j=i-1;j>=0;j--){JSONObject q=pages.getJSONObject(j);if(q.optString("kind").equals("registration")){reg=q;break;}if(answer(q))break;}if(reg==null||!reg.optBoolean("reviewed"))throw new IOException("Перед листом "+(i+1)+" нужна сверенная регистрация");}}}
         if(count==0)throw new IOException("Нет бланков ответов №1");
