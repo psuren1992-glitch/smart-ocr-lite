@@ -1,0 +1,5 @@
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+app/src/main/assets/*.onnx binary
+app/src/main/assets/qa/*.pdf binary
+app/src/main/assets/licenses/* -text -whitespace

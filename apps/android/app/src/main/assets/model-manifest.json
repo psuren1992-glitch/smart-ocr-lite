@@ -1,0 +1,6 @@
+{
+  "source": "eslav_PP-OCRv5_mobile_rec",
+  "conversion": "Paddle2ONNX 2.1.0 / Paddle 3.1.1 / opset 17 / no quantization",
+  "sha256": "a966b18ae06292f6df1114183fa69db2fb31ab62d930d73b44b8d1bef0ae77ff",
+  "source_weights_sha256": "f11057b05d8517868bca505271278973d706600d9dcc184cbcf5c4512091c32b"
+}
